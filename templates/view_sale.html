@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>🧾 Sale #{{ sale.id }}</h2>
+    <a href="{{ url_for('core.sales') }}" class="btn btn-secondary">⬅ Back to Sales</a>
+  </div>
+
+  <div class="card shadow-sm p-3 mb-4">
+    <div class="row">
+      <div class="col-md-6">
+        <p><strong>Customer:</strong> {{ sale.customer or "Walk-in" }}</p>
+        <p><strong>Date:</strong> {{ sale.created_at.strftime("%Y-%m-%d %H:%M") if sale.created_at else '—' }}</p>
+      </div>
+      <div class="col-md-6 text-md-end">
+        <p><strong>Total (incl. VAT):</strong> ₱{{ "%.2f"|format(sale.total) }}</p>
+        <p><strong>VAT (12%):</strong> ₱{{ "%.2f"|format(sale.vat) }}</p>
+      </div>
+    </div>
+  </div>
+
+  <h4>🛍️ Sold Items</h4>
+  <table class="table table-striped align-middle">
+    <thead class="table-light">
+      <tr>
+        <th>SKU</th>
+        <th>Name</th>
+        <th>Qty</th>
+        <th>Unit Price</th>
+        <th>Line Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in items %}
+        <tr>
+          <td>{{ i.sku }}</td>
+          <td>{{ i.product_name }}</td>
+          <td>{{ i.qty }}</td>
+          <td>₱{{ "%.2f"|format(i.unit_price) }}</td>
+          <td>₱{{ "%.2f"|format(i.line_total) }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="text-center">No sale items found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="mt-4 text-end">
+    <button class="btn btn-outline-primary" onclick="window.print()">🖨️ Print Receipt</button>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="container mt-4">
+    <div class="container mt-4">
+    <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
+        &larr; Back to Reports List
+    </a>
+    <h2 class="fw-bold text-primary">📊 Balance Sheet</h2>
+    <p class="text-muted">Snapshot of Assets, Liabilities, and Equity.</p>
+
+    <div class="row">
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-primary text-white fw-bold">ASSETS</div>
+                <div class="card-body">
+                    <table class="table table-sm table-borderless">
+                        <tbody>
+                            {% for asset in assets %}
+                            <tr>
+                                <td>{{ asset.account }}</td>
+                                <td class="text-end">{{ asset.balance | money }}</td>
+                            </tr>
+                            {% endfor %}
+                            <tr class="fw-bold table-primary">
+                                <td>TOTAL ASSETS</td>
+                                <td class="text-end">{{ total_assets | money }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-info text-dark fw-bold">LIABILITIES & EQUITY</div>
+                <div class="card-body">
+                    
+                    <h6 class="text-info">LIABILITIES</h6>
+                    <table class="table table-sm table-borderless">
+                        <tbody>
+                            {% for liability in liabilities %}
+                            <tr>
+                                <td>{{ liability.account }}</td>
+                                <td class="text-end">{{ liability.balance | money }}</td>
+                            </tr>
+                            {% endfor %}
+                            <tr class="fw-bold">
+                                <td>Total Liabilities</td>
+                                <td class="text-end">{{ total_liabilities | money }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h6 class="text-success mt-4">EQUITY</h6>
+                    <table class="table table-sm table-borderless">
+                        <tbody>
+                            {% for eq in equity %}
+                            <tr>
+                                <td>{{ eq.account }}</td>
+                                <td class="text-end">{{ eq.balance | money }}</td>
+                            </tr>
+                            {% endfor %}
+                            <tr class="fw-bold">
+                                <td>Total Equity</td>
+                                <td class="text-end">{{ total_equity | money }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <hr>
+                    <table class="table table-sm table-borderless">
+                        <tr class="fw-bold table-secondary">
+                            <td>TOTAL LIABILITIES & EQUITY</td>
+                            <td class="text-end">{{ total_liabilities_and_equity | money }}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

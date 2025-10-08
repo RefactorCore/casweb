@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+{% block content %}
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<div class="container my-4">
+  <h2 class="mb-4">📊 Dashboard Overview</h2>
+
+  <!-- Summary Cards -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-3">
+      <div class="card shadow-sm text-center border-primary">
+        <div class="card-body">
+          <h6 class="text-muted">Total Sales</h6>
+          <h4 class="text-success">₱{{ total_sales | round(2) }}</h4>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card shadow-sm text-center border-info">
+        <div class="card-body">
+          <h6 class="text-muted">Total Purchases</h6>
+          <h4 class="text-danger">₱{{ total_purchases | round(2) }}</h4>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card shadow-sm text-center border-warning">
+        <div class="card-body">
+          <h6 class="text-muted">Inventory Value</h6>
+          <h4>₱{{ total_inventory_value | round(2) }}</h4>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card shadow-sm text-center border-success">
+        <div class="card-body">
+          <h6 class="text-muted">Net Income</h6>
+          <h4 class="text-success">₱{{ net_income | round(2) }}</h4>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <h5 class="card-title mb-3">Sales (Last 7 Days)</h5>
+      <canvas id="salesChart" height="100"></canvas>
+    </div>
+  </div>
+
+  <!-- Inventory Table -->
+  <h4 class="mt-5 mb-3">📦 Product Inventory</h4>
+  <div class="table-responsive">
+    <table class="table table-striped align-middle">
+      <thead class="table-primary">
+        <tr>
+          <th>SKU</th><th>Name</th><th>Sale</th><th>Cost</th><th>Qty</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for p in products %}
+      <tr {% if p.quantity <= 5 %}class="table-warning"{% endif %}>
+        <td>{{ p.sku }}</td>
+        <td>{{ p.name }}</td>
+        <td>₱{{ p.sale_price|round(2) }}</td>
+        <td>₱{{ p.cost_price|round(2) }}</td>
+        <td>{{ p.quantity }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Low Stock -->
+  <h5 class="mt-4">⚠️ Low Stock Alerts</h5>
+  <ul class="list-group">
+    {% for p in low_stock %}
+      <li class="list-group-item d-flex justify-content-between align-items-center">
+        {{ p.name }}
+        <span class="badge bg-danger">{{ p.quantity }}</span>
+      </li>
+    {% else %}
+      <li class="list-group-item text-muted">No low stock items.</li>
+    {% endfor %}
+  </ul>
+</div>
+
+<script>
+const ctx = document.getElementById('salesChart').getContext('2d');
+new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: {{ labels|tojson }},
+    datasets: [{
+      label: 'Daily Sales (₱)',
+      data: {{ sales_by_day|tojson }},
+      fill: true,
+      borderColor: 'rgba(54,162,235,1)',
+      backgroundColor: 'rgba(54,162,235,0.2)',
+      tension: 0.3,
+      pointRadius: 4,
+      pointBackgroundColor: 'rgba(54,162,235,1)'
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+{% endblock %}

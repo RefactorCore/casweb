@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+  <!-- Header Section -->
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0">📄 Purchase #{{ purchase.id }}</h2>
+      <p class="text-muted mb-0">
+        Supplier: <strong>{{ purchase.supplier }}</strong> &nbsp; | &nbsp;
+        Date: {{ purchase.created_at.strftime("%Y-%m-%d %H:%M") if purchase.created_at else "—" }}
+      </p>
+    </div>
+    <div>
+      <button onclick="window.print()" class="btn btn-outline-secondary me-2">
+        🖨 Print
+      </button>
+      <a href="{{ url_for('core.purchases') }}" class="btn btn-secondary">
+        ⬅ Back
+      </a>
+    </div>
+  </div>
+
+  <!-- Summary Cards -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-4">
+      <div class="card shadow-sm border-0 h-100">
+        <div class="card-body text-center">
+          <h6 class="text-muted">Total</h6>
+          <h3 class="text-success fw-bold">₱{{ "%.2f"|format(purchase.total) }}</h3>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm border-0 h-100">
+        <div class="card-body text-center">
+          <h6 class="text-muted">VAT</h6>
+          <h3 class="text-warning fw-bold">₱{{ "%.2f"|format(purchase.vat) }}</h3>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card shadow-sm border-0 h-100">
+        <div class="card-body text-center">
+          <h6 class="text-muted">Net of VAT</h6>
+          <h3 class="fw-bold">
+            ₱{{ "%.2f"|format(purchase.total - purchase.vat) }}
+          </h3>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Items Table -->
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-light fw-semibold">
+      📦 Purchased Items
+    </div>
+    <div class="table-responsive">
+      <table class="table align-middle table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>SKU</th>
+            <th>Product Name</th>
+            <th class="text-center">Qty</th>
+            <th class="text-end">Unit Cost (₱)</th>
+            <th class="text-end">Line Total (₱)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i in items %}
+            <tr>
+              <td>{{ i.sku }}</td>
+              <td>{{ i.product_name }}</td>
+              <td class="text-center">{{ i.qty }}</td>
+              <td class="text-end">₱{{ "%.2f"|format(i.unit_cost) }}</td>
+              <td class="text-end">₱{{ "%.2f"|format(i.line_total) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot class="table-light">
+          <tr>
+            <th colspan="4" class="text-end">Subtotal:</th>
+            <th class="text-end">₱{{ "%.2f"|format(purchase.total - purchase.vat) }}</th>
+          </tr>
+          <tr>
+            <th colspan="4" class="text-end">VAT:</th>
+            <th class="text-end">₱{{ "%.2f"|format(purchase.vat) }}</th>
+          </tr>
+          <tr>
+            <th colspan="4" class="text-end fw-bold">Total:</th>
+            <th class="text-end fw-bold text-success">₱{{ "%.2f"|format(purchase.total) }}</th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- Footer Actions -->
+  <div class="mt-4 d-flex justify-content-between">
+    <button class="btn btn-danger" onclick="deletePurchase({{ purchase.id }})">
+      🗑 Delete Purchase
+    </button>
+  </div>
+
+</div>
+
+<!-- Print-Only Styles -->
+<style>
+@media print {
+  .btn, .card-header, .mt-4, nav, header { display: none !important; }
+  body {
+    background: white !important;
+    font-size: 12px;
+  }
+  table {
+    font-size: 12px;
+  }
+  h2 {
+    font-size: 18px;
+  }
+}
+</style>
+
+<!-- Delete Script -->
+<script>
+function deletePurchase(id) {
+  if (confirm(`Delete Purchase #${id}? This cannot be undone.`)) {
+    fetch(`/delete_purchase/${id}`, { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'deleted') {
+          alert('Purchase deleted successfully.');
+          window.location.href = "{{ url_for('core.purchases') }}";
+        } else {
+          alert('Error deleting purchase.');
+        }
+      });
+  }
+}
+</script>
+
+{% endblock %}

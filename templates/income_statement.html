@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="container mt-4">
+
+    <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
+        &larr; Back to Reports List
+    </a>
+    
+    <h2 class="fw-bold text-primary mb-4">📈 Income Statement</h2>
+
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <table class="table table-bordered table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Description</th>
+                        <th class="text-end">Amount (₱)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Sales Revenue</strong></td>
+                        <td class="text-end">{{ total_revenue | money }}</td>
+                    </tr>
+                    
+                    <tr>
+                        <td>Cost of Goods Sold (COGS)</td>
+                        <td class="text-end text-danger">({{ total_cogs | money }})</td>
+                    </tr>
+                    
+                    <tr class="table-secondary">
+                        <td><strong>Gross Profit</strong></td>
+                        <td class="text-end fw-bold">{{ gross_profit | money }}</td>
+                    </tr>
+                    
+                    <tr>
+                        <td>Operating Expenses</td>
+                        <td class="text-end text-danger">({{ total_expense | money }})</td>
+                    </tr>
+                    
+                    <tr class="table-success">
+                        <td><strong>Net Income</strong></td>
+                        <td class="text-end fw-bold">{{ net_income | money }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+</div>
+
+{% endblock %}

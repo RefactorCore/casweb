@@ -1,0 +1,133 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container-fluid py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="fw-bold text-primary">🧾 New Purchase</h2>
+    <a href="{{ url_for('core.purchases') }}" class="btn btn-outline-secondary">📜 View Purchase History</a>
+  </div>
+
+  <form method="post" id="purchase-form" class="card shadow-sm p-4">
+    <div class="row mb-3">
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Supplier</label>
+        <input id="supplier" name="supplier" class="form-control" placeholder="Search or type supplier..." list="supplier-list" required>
+        <datalist id="supplier-list">
+          {% for s in suppliers %}
+            <option value="{{ s }}"></option>
+          {% endfor %}
+        </datalist>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label fw-semibold">Purchase Date</label>
+        <input type="date" name="date" class="form-control" value="{{ today }}">
+      </div>
+      <div class="col-md-3 d-flex align-items-end justify-content-end">
+        <button type="submit" class="btn btn-success px-4">💾 Record Purchase</button>
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="row g-2 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">Product</label>
+        <select id="product-select" class="form-select">
+          <option value="">-- select product --</option>
+          {% for p in products %}
+            <option value="{{ p.sku }}" data-name="{{ p.name }}">{{ p.sku }} - {{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Qty</label>
+        <input id="p-qty" type="number" value="1" min="1" class="form-control" />
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Unit Cost</label>
+        <input id="p-unit" type="number" step="0.01" value="0" class="form-control" />
+      </div>
+      <div class="col-md-2">
+        <button id="add-p" class="btn btn-primary w-100">➕ Add Item</button>
+      </div>
+    </div>
+
+    <hr class="my-4">
+
+    <h5 class="fw-bold">Items</h5>
+    <table id="p-items" class="table table-striped table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>SKU</th><th>Name</th><th>Qty</th><th>Unit Cost</th><th>Net</th><th>VAT (12%)</th><th>Line Total</th><th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="text-end mt-3">
+      <p><strong>Subtotal:</strong> ₱<span id="p-subtotal">0.00</span></p>
+      <p><strong>VAT (12%):</strong> ₱<span id="p-vat">0.00</span></p>
+      <p class="fs-5 fw-bold text-success">Total: ₱<span id="p-total">0.00</span></p>
+    </div>
+
+    <input type="hidden" name="items_json" id="items_json" />
+    <input type="hidden" name="supplier_input" id="supplier_input" />
+  </form>
+</div>
+
+<script>
+const VAT_RATE = 0.12;
+let items = [];
+
+function render() {
+  const tbody = document.querySelector('#p-items tbody');
+  tbody.innerHTML = '';
+  let subtotal = 0, vat_total = 0;
+
+  for (const [i, it] of items.entries()) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${it.sku}</td>
+      <td>${it.name}</td>
+      <td>${it.qty}</td>
+      <td>${it.unit_cost.toFixed(2)}</td>
+      <td>${it.net.toFixed(2)}</td>
+      <td>${it.vat.toFixed(2)}</td>
+      <td>${it.line_total.toFixed(2)}</td>
+      <td><button class="btn btn-sm btn-outline-danger" onclick="removeItem(${i})">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+    subtotal += it.net;
+    vat_total += it.vat;
+  }
+
+  document.getElementById('p-subtotal').textContent = subtotal.toFixed(2);
+  document.getElementById('p-vat').textContent = vat_total.toFixed(2);
+  document.getElementById('p-total').textContent = (subtotal + vat_total).toFixed(2);
+  document.getElementById('items_json').value = JSON.stringify(items);
+  document.getElementById('supplier_input').value = document.getElementById('supplier').value;
+}
+
+function removeItem(i) {
+  items.splice(i, 1);
+  render();
+}
+
+document.getElementById('add-p').onclick = (e) => {
+  e.preventDefault();
+  const sel = document.getElementById('product-select');
+  const sku = sel.value;
+  const name = sel.options[sel.selectedIndex]?.dataset.name || 'Unknown';
+  const qty = parseInt(document.getElementById('p-qty').value) || 0;
+  const unit = parseFloat(document.getElementById('p-unit').value) || 0;
+
+  if (!sku || qty <= 0) return alert('Select a product and valid quantity.');
+
+  const net = qty * unit;
+  const vat = Math.round(net * VAT_RATE * 100) / 100;
+  const line_total = net + vat;
+
+  items.push({ sku, name, qty, unit_cost: unit, net, vat, line_total });
+  render();
+};
+</script>
+{% endblock %}

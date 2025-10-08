@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .sidebar, header { display: none !important; }
+  body, .main-content {
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: #f8f9fa;
+  }
+  .pos-container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .pos-header {
+    background-color: #0d6efd;
+    color: white;
+    padding: 15px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pos-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+  .pos-products {
+    flex: 2;
+    padding: 15px;
+    overflow-y: auto;
+    background: white;
+    border-right: 1px solid #dee2e6;
+  }
+  .pos-cart {
+    flex: 1;
+    background-color: #f8f9fa;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+  }
+  .product-card {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 10px;
+    margin: 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+  }
+  .product-card:hover {
+    transform: scale(1.03);
+    background-color: #f1f1f1;
+  }
+  .cart-list {
+    flex: 1;
+    overflow-y: auto;
+    margin-bottom: 10px;
+  }
+  /* Calculator popup */
+  #calcModal .modal-content {
+    border-radius: 12px;
+  }
+  .calc-btn {
+    width: 70px;
+    height: 70px;
+    font-size: 1.5rem;
+    margin: 4px;
+  }
+  /* Receipt popup */
+  #receiptModal pre {
+    font-family: monospace;
+    white-space: pre-wrap;
+  }
+</style>
+
+<div class="pos-container">
+  <div class="pos-header">
+    <h2><i class="bi bi-cart3 me-2"></i>Point of Sale</h2>
+    <a href="{{ url_for('core.index') }}" class="btn btn-light btn-sm">
+      <i class="bi bi-box-arrow-left me-1"></i> Exit POS
+    </a>
+  </div>
+
+  <div class="pos-body">
+    <!-- Left: Products -->
+   <div class="pos-products">
+  <form id="posSearchForm" method="GET" action="{{ url_for('core.pos') }}" class="mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h5>Products</h5>
+      <div class="input-group" style="width: 300px;">
+        <input type="text" name="search" value="{{ search }}" class="form-control form-control-sm" placeholder="Search product...">
+        <button type="submit" class="btn btn-sm btn-primary">
+          <i class="bi bi-search"></i> Search
+        </button>
+      </div>
+    </div>
+  </form>
+  
+  <div id="productGrid" class="row row-cols-2 row-cols-md-3 g-2">
+    {% for p in products %}
+    <div class="col product-col">
+      <div class="product-card" data-sku="{{ p.sku }}" data-name="{{ p.name }}" data-price="{{ p.sale_price }}">
+        <strong>{{ p.name }}</strong><br>
+        <small>{{ p.sku }}</small><br>
+        <span class="badge bg-success">₱{{ "%.2f"|format(p.sale_price) }}</span>
+        <br><span class="badge bg-info text-dark">Stock: {{ p.quantity }}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% include '_pagination.html' %}
+</div>
+
+    <!-- Right: Cart -->
+    <div class="pos-cart">
+      <h5><i class="bi bi-receipt me-1"></i>Current Sale</h5>
+      <div class="cart-list" id="cartList"></div>
+      <div>
+        <h6>Total: ₱<span id="total">0.00</span></h6>
+        <button id="checkoutBtn" class="btn btn-primary w-100 mt-2">
+          <i class="bi bi-cash-coin me-1"></i> Checkout
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Calculator Modal -->
+<div class="modal fade" id="calcModal" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content p-3">
+      <h5 class="text-center">Enter Cash</h5>
+      <input type="text" id="cashInput" class="form-control text-end mb-2" readonly>
+      <div class="d-flex flex-wrap justify-content-center">
+        {% for n in [7,8,9,4,5,6,1,2,3,0] %}
+          <button class="btn btn-outline-primary calc-btn" onclick="press('{{n}}')">{{n}}</button>
+        {% endfor %}
+        <button class="btn btn-outline-secondary calc-btn" onclick="press('C')">C</button>
+        <button class="btn btn-success calc-btn" onclick="finishCheckout()">OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Receipt Modal -->
+<div class="modal fade" id="receiptModal" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content p-3">
+      <h5 class="text-center">Receipt</h5>
+      <pre id="receiptText"></pre>
+      <button class="btn btn-outline-secondary w-100" data-bs-dismiss="modal">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let cart = [];
+let cashTendered = 0;
+
+function renderCart() {
+  const list = document.getElementById('cartList');
+  list.innerHTML = '';
+  let total = 0;
+  cart.forEach((item, i) => {
+    total += item.price * item.qty;
+    list.innerHTML += `
+      <div class="d-flex justify-content-between align-items-center border-bottom py-1">
+        <div>
+          <strong>${item.name}</strong><br>
+          <small>${item.qty} × ₱${item.price.toFixed(2)}</small>
+        </div>
+        <button class="btn btn-sm btn-outline-danger" onclick="removeItem(${i})">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>`;
+  });
+  document.getElementById('total').innerText = total.toFixed(2);
+}
+
+function removeItem(i) {
+  cart.splice(i, 1);
+  renderCart();
+}
+
+document.querySelectorAll('.product-card').forEach(el => {
+  el.addEventListener('click', () => {
+    const sku = el.dataset.sku;
+    const name = el.dataset.name;
+    const price = parseFloat(el.dataset.price);
+    const existing = cart.find(i => i.sku === sku);
+    if (existing) existing.qty++;
+    else cart.push({ sku, name, price, qty: 1 });
+    renderCart();
+  });
+});
+
+
+// --- Calculator Logic ---
+function press(val) {
+  const inp = document.getElementById('cashInput');
+  if (val === 'C') inp.value = '';
+  else inp.value += val;
+}
+
+document.getElementById('checkoutBtn').addEventListener('click', () => {
+  if (cart.length === 0) return alert('No items in cart.');
+  const modal = new bootstrap.Modal(document.getElementById('calcModal'));
+  modal.show();
+});
+
+async function finishCheckout() {
+  const total = parseFloat(document.getElementById('total').innerText);
+  const cash = parseFloat(document.getElementById('cashInput').value || 0);
+  if (isNaN(cash) || cash < total) {
+    alert('Insufficient cash.');
+    return;
+  }
+
+  const response = await fetch('/api/sale', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: cart })
+  });
+
+  const data = await response.json();
+  if (data.status === 'ok') {
+    const change = cash - total;
+    const receipt = generateReceipt(cart, total, cash, change);
+    document.getElementById('receiptText').innerText = receipt;
+    new bootstrap.Modal(document.getElementById('receiptModal')).show();
+    cart = [];
+    renderCart();
+    document.getElementById('cashInput').value = '';
+    bootstrap.Modal.getInstance(document.getElementById('calcModal')).hide();
+  } else {
+    alert(data.error || 'Error during checkout.');
+  }
+}
+
+function generateReceipt(cart, total, cash, change) {
+  let text = "       🧾 SIMPLE POS RECEIPT\n";
+  text += "--------------------------------\n";
+  cart.forEach(i => text += `${i.name}\n  ${i.qty} × ₱${i.price.toFixed(2)} = ₱${(i.qty*i.price).toFixed(2)}\n`);
+  text += "--------------------------------\n";
+  text += `TOTAL: ₱${total.toFixed(2)}\n`;
+  text += `CASH:  ₱${cash.toFixed(2)}\n`;
+  text += `CHANGE: ₱${change.toFixed(2)}\n`;
+  text += "--------------------------------\n";
+  text += "Thank you for shopping!\n";
+  return text;
+}
+</script>
+{% endblock %}

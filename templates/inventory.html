@@ -1,0 +1,203 @@
+{% extends 'base.html' %}
+{% block content %}
+<style>
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+  .low-stock {
+    background-color: #fff3cd !important;
+  }
+  .badge-low {
+    background-color: #dc3545;
+  }
+  .badge-ok {
+    background-color: #28a745;
+  }
+</style>
+
+<div class="container-fluid mt-3">
+  <div class="page-header">
+    <h2><i class="bi bi-box-seam me-2"></i>Inventory</h2>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProductModal">
+      <i class="bi bi-plus-circle me-1"></i> Add Product
+    </button>
+  </div>
+
+  <!-- Search and Filters -->
+<div class="card mb-3">
+  <div class="card-body d-flex justify-content-between align-items-center">
+    
+    <form method="GET" action="{{ url_for('core.inventory') }}" class="d-flex align-items-center">
+      <div class="input-group" style="max-width: 300px;">
+        <input type="text" name="search" value="{{ search or '' }}" class="form-control" placeholder="Search by SKU or Name...">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-search"></i>
+        </button>
+      </div>
+    </form>
+    
+    <div>
+      <span class="badge bg-success">In Stock</span>
+      <span class="badge bg-danger">Low Stock (≤5)</span>
+    </div>
+  </div>
+</div>
+
+
+  <!-- Products Table -->
+  <div class="card">
+    <div class="card-body">
+      <div class="table-responsive">
+        <table id="inventoryTable" class="table table-hover align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>SKU</th>
+              <th>Name</th>
+              <th>Sale Price</th>
+              <th>Cost Price</th>
+              <th>Quantity</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in products %}
+            <tr class="{% if p.quantity <= 5 %}low-stock{% endif %}">
+              <td>{{ p.sku }}</td>
+              <td>{{ p.name }}</td>
+              <td>₱{{ "%.2f"|format(p.sale_price) }}</td>
+              <td>₱{{ "%.2f"|format(p.cost_price) }}</td>
+              <td>{{ p.quantity }}</td>
+              <td>
+                {% if p.quantity <= 5 %}
+                  <span class="badge badge-low">Low Stock</span>
+                {% else %}
+                  <span class="badge badge-ok">In Stock</span>
+                {% endif %}
+              </td>
+              <td>
+                <button class="btn btn-sm btn-outline-secondary" onclick="editProduct('{{ p.sku }}','{{ p.name }}',{{ p.sale_price }},{{ p.cost_price }},{{ p.quantity }})">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteProduct('{{ p.sku }}')">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Product Modal -->
+<div class="modal fade" id="addProductModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form method="post">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-box me-2"></i>Add New Product</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">SKU</label>
+            <input name="sku" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Name</label>
+            <input name="name" class="form-control" required>
+          </div>
+          <div class="row">
+            <div class="col">
+              <label class="form-label">Sale Price</label>
+              <input name="sale_price" class="form-control" type="number" step="0.01" required>
+            </div>
+            <div class="col">
+              <label class="form-label">Cost Price</label>
+              <input name="cost_price" class="form-control" type="number" step="0.01" required>
+            </div>
+          </div>
+          <div class="mt-3">
+            <label class="form-label">Quantity</label>
+            <input name="quantity" class="form-control" type="number" value="0" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save me-1"></i>Save Product
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Product Modal -->
+<div class="modal fade" id="editProductModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form id="editForm" method="post" action="/update_product">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Edit Product</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="sku" id="editSKU">
+          <div class="mb-3">
+            <label class="form-label">Name</label>
+            <input name="name" id="editName" class="form-control" required>
+          </div>
+          <div class="row">
+            <div class="col">
+              <label class="form-label">Sale Price</label>
+              <input name="sale_price" id="editSale" class="form-control" type="number" step="0.01" required>
+            </div>
+            <div class="col">
+              <label class="form-label">Cost Price</label>
+              <input name="cost_price" id="editCost" class="form-control" type="number" step="0.01" required>
+            </div>
+          </div>
+          <div class="mt-3">
+            <label class="form-label">Quantity</label>
+            <input name="quantity" id="editQty" class="form-control" type="number" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+
+  // 📝 Edit Product (opens modal)
+  function editProduct(sku, name, sale, cost, qty) {
+    document.getElementById('editSKU').value = sku;
+    document.getElementById('editName').value = name;
+    document.getElementById('editSale').value = sale;
+    document.getElementById('editCost').value = cost;
+    document.getElementById('editQty').value = qty;
+    new bootstrap.Modal(document.getElementById('editProductModal')).show();
+  }
+
+  // 🗑️ Delete Product (stub — you can connect backend later)
+  function deleteProduct(sku) {
+    if (confirm(`Delete product ${sku}?`)) {
+      fetch(`/delete_product/${sku}`, { method: 'POST' })
+        .then(res => res.json())
+        .then(data => location.reload())
+        .catch(() => alert('Failed to delete.'));
+    }
+  }
+</script>
+{% include "_pagination.html" %}
+{% endblock %}
+

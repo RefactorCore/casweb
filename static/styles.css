@@ -1,0 +1,8 @@
+body{font-family: Arial, Helvetica, sans-serif; margin:20px;}
+header h1{margin:0;}
+nav a{margin-right:10px;}
+table{border-collapse:collapse; width:90%;}
+table, th, td{border:1px solid #ddd;}
+th, td{padding:6px;}
+.low{background:#ffecec;}
+.flashes{color:green;}
