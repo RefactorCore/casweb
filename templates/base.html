@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>PH-Approve Accounting</title>
+  <title>Coretally</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   
   <!-- Bootstrap + Icons -->
@@ -18,6 +18,8 @@
     }
     .sidebar {
       min-height: 100vh;
+      height: 100vh; /* <-- ADD THIS LINE */
+      overflow-y: auto;
       background-color: #0d6efd;
       color: white;
       position: fixed;
@@ -71,8 +73,7 @@
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="px-3 mb-3">
-      <h5 class="fw-bold text-white mb-0">💼 PH-Approve</h5>
-      <small class="text-light">Accounting MVP</small>
+      <h5 class="fw-bold text-white mb-0">💼 Coretally</h5>
     </div>
     <hr class="border-light my-2">
 
@@ -98,6 +99,30 @@
       <a href="{{ url_for('core.reports') }}" class="{% if '/reports' in request.path %}active{% endif %}">
         <i class="bi bi-journal-text me-2"></i> Journals
       </a>
+      <a href="{{ url_for('ar_ap.credit_memos') }}" class="{% if '/credit-memos' in request.path %}active{% endif %}">
+        <i class="bi bi-file-earmark-minus me-2"></i> Credit Memos
+      </a>
+
+      <a class="nav-link text-white" data-bs-toggle="collapse" href="#taxReportsSubmenu" role="button" aria-expanded="false" aria-controls="taxReportsSubmenu">
+        <i class="bi bi-file-earmark-bar-graph me-2"></i> Tax Reports
+      </a>
+      <div class="collapse" id="taxReportsSubmenu">
+          <a href="{{ url_for('reports.vat_return') }}" class="ms-3">
+            - VAT Return
+          </a>
+          <a href="{{ url_for('reports.summary_list_sales') }}" class="ms-3">
+            - Summary List of Sales
+          </a>
+          <a href="{{ url_for('reports.summary_list_purchases') }}" class="ms-3">
+            - Summary List of Purchases
+          </a>
+           <a href="{{ url_for('reports.form_2307_report') }}" class="ms-3">
+            - Form 2307 Data
+          </a>
+      </div>
+      <a href="{{ url_for('core.settings') }}" class="{% if '/settings' in request.path %}active{% endif %}">
+        <i class="bi bi-gear me-2"></i> Settings
+      </a>
       <!-- <a href="{{ url_for('core.vat_report') }}" class="{% if '/vat_report' in request.path %}active{% endif %}">
         <i class="bi bi-percent me-2"></i> VAT Report
       </a>
@@ -110,9 +135,10 @@
   <!-- Main -->
   <div class="main-content">
     <header>
-      <h1>PH-Approve Accounting</h1>
+      <h1>{{ company.name if company else 'Coretally' }}</h1>
       <div>
-        <i class="bi bi-person-circle me-2"></i> Admin
+        <i class="bi bi-person-circle me-2"></i> {{ current_user.username }}
+        <a href="{{ url_for('core.logout') }}" class="ms-2 btn btn-sm btn-outline-secondary">Logout</a>
       </div>
     </header>
 

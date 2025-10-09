@@ -1,0 +1,66 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h3>VAT Return Data</h3>
+<p>This report summarizes the data needed for BIR Form 2550M/Q.</p>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <form method="GET" class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label for="month" class="form-label">Select Month</label>
+                <input type="month" id="month" name="month" value="{{ month }}" class="form-control">
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-primary">Generate Report</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h4>Summary for {{ month }}</h4>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6">
+                <h5>Sales / Output Tax</h5>
+                <table class="table">
+                    <tr>
+                        <td>Taxable Sales (Net)</td>
+                        <td class="text-end">{{ net_sales|money }}</td>
+                    </tr>
+                    <tr class="table-primary">
+                        <td><strong>Output VAT</strong></td>
+                        <td class="text-end"><strong>{{ net_output_vat|money }}</strong></td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="col-md-6">
+                <h5>Purchases / Input Tax</h5>
+                <table class="table">
+                    <tr>
+                        <td>Purchases (Net)</td>
+                        <td class="text-end">{{ total_purchases_net|money }}</td>
+                    </tr>
+                    <tr class="table-primary">
+                        <td><strong>Input VAT</strong></td>
+                        <td class="text-end"><strong>{{ total_input_vat|money }}</strong></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <hr>
+
+        <div class="text-center">
+            <h3>VAT Payable / (Overpayment)</h3>
+            <h2 class="fw-bold {% if vat_payable >= 0 %}text-danger{% else %}text-success{% endif %}">
+                {{ vat_payable|money }}
+            </h2>
+        </div>
+    </div>
+</div>
+{% endblock %}
