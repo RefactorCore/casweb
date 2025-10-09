@@ -1,32 +1,24 @@
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime # Keep ONLY this import for datetime
+from flask_login import UserMixin
+from datetime import datetime
 import json
-# REMOVE the second 'import datetime' line
 
 db = SQLAlchemy()
 
+class CompanyProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    business_style = db.Column(db.String(200))
+    tin = db.Column(db.String(50), nullable=False)
+    address = db.Column(db.String(300), nullable=False)
+    license_key = db.Column(db.String(100))
 
 class Account(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(32), unique=True, nullable=False)
     name = db.Column(db.String(200), nullable=False)
     type = db.Column(db.String(50), nullable=False)  # Asset, Liability, Equity, Revenue, Expense
-    # FIX: Change to datetime.utcnow, relying on 'from datetime import datetime'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-def compute_account_balances():
-    """Aggregate balances for each account from JournalEntry lines."""
-    accts = {}
-    # JournalEntry class is defined below, ensure it's imported or defined if this function runs early
-    for je in JournalEntry.query.all():
-        for line in je.entries():
-            acc = line.get('account')
-            debit = float(line.get('debit',0) or 0)
-            credit = float(line.get('credit',0) or 0)
-            if acc not in accts:
-                accts[acc] = 0.0
-            accts[acc] += debit - credit
-    return accts
 
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -36,37 +28,24 @@ class Product(db.Model):
     cost_price = db.Column(db.Float, nullable=False, default=0.0)
     quantity = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    LOW_STOCK_THRESHOLD = 5  # 👈 adjustable stock warning
+    LOW_STOCK_THRESHOLD = 5
 
     def is_low_stock(self):
-        """Return True if below threshold."""
         return self.quantity <= self.LOW_STOCK_THRESHOLD
 
     def to_dict(self):
-        """For JSON APIs and frontend search."""
-        return {
-            "id": self.id,
-            "sku": self.sku,
-            "name": self.name,
-            "sale_price": self.sale_price,
-            "cost_price": self.cost_price,
-            "quantity": self.quantity,
-            "low": self.is_low_stock(),
-        }
+        return {"id": self.id, "sku": self.sku, "name": self.name, "sale_price": self.sale_price, "cost_price": self.cost_price, "quantity": self.quantity, "low": self.is_low_stock()}
 
     def adjust_stock(self, change):
-        """Adjust product stock by given qty (can be negative)."""
         self.quantity = max(self.quantity + change, 0)
-
 
 class Sale(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    customer_name = db.Column(db.String(200), nullable=True)  # 👈 Add this line
+    customer_name = db.Column(db.String(200), nullable=True)
     total = db.Column(db.Float, nullable=False)
     vat = db.Column(db.Float, nullable=False, default=0.0)
-    status = db.Column(db.String(50), default='paid')  # 👈 Optional but useful
+    status = db.Column(db.String(50), default='paid')
     items = db.relationship('SaleItem', backref='sale', cascade='all, delete-orphan')
 
 class SaleItem(db.Model):
@@ -76,9 +55,9 @@ class SaleItem(db.Model):
     product_name = db.Column(db.String(200))
     sku = db.Column(db.String(64))
     qty = db.Column(db.Integer, nullable=False)
-    unit_price = db.Column(db.Float, nullable=False)  # sale price
+    unit_price = db.Column(db.Float, nullable=False)
     line_total = db.Column(db.Float, nullable=False)
-    cogs = db.Column(db.Float, nullable=False, default=0.0)  # cost of goods sold amount for the line
+    cogs = db.Column(db.Float, nullable=False, default=0.0)
 
 class Purchase(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -88,16 +67,6 @@ class Purchase(db.Model):
     vat = db.Column(db.Float, nullable=False, default=0.0)
     items = db.relationship('PurchaseItem', backref='purchase', cascade='all, delete-orphan')
 
-    def to_dict(self):
-        """Simple summary for dashboards or AJAX."""
-        return {
-            "id": self.id,
-            "date": self.created_at.strftime("%Y-%m-%d"),
-            "supplier": self.supplier or "Unknown",
-            "total": round(self.total, 2),
-            "vat": round(self.vat, 2),
-        }
-
 class PurchaseItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     purchase_id = db.Column(db.Integer, db.ForeignKey('purchase.id'), nullable=False)
@@ -105,7 +74,7 @@ class PurchaseItem(db.Model):
     product_name = db.Column(db.String(200))
     sku = db.Column(db.String(64))
     qty = db.Column(db.Integer, nullable=False)
-    unit_cost = db.Column(db.Float, nullable=False)  # cost per unit (net)
+    unit_cost = db.Column(db.Float, nullable=False)
     line_total = db.Column(db.Float, nullable=False)
 
 class JournalEntry(db.Model):
@@ -117,24 +86,15 @@ class JournalEntry(db.Model):
     def entries(self):
         try:
             return json.loads(self.entries_json)
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             return []
 
-    def pretty_summary(self):
-        """Readable short format for accounting dashboard."""
-        try:
-            lines = self.entries()
-            accounts = ", ".join(l["account"] for l in lines)
-            return f"JE#{self.id}: {accounts}"
-        except:
-            return f"JE#{self.id}"
-
-
-class User(db.Model):
+# ✅ --- FIX: Inherits from UserMixin to integrate with Flask-Login ---
+class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
-    role = db.Column(db.String(50), nullable=False, default='Cashier')  # Admin, Accountant, Cashier
+    role = db.Column(db.String(50), nullable=False, default='Cashier')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Customer(db.Model):
@@ -142,6 +102,7 @@ class Customer(db.Model):
     name = db.Column(db.String(200), nullable=False)
     tin = db.Column(db.String(50))
     address = db.Column(db.String(300))
+    wht_rate_percent = db.Column(db.Float, default=0.0)
 
 class Supplier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -157,7 +118,7 @@ class ARInvoice(db.Model):
     total = db.Column(db.Float, nullable=False)
     vat = db.Column(db.Float, nullable=False, default=0.0)
     paid = db.Column(db.Float, nullable=False, default=0.0)
-    status = db.Column(db.String(50), default='Open')  # Open, Paid, Partially Paid
+    status = db.Column(db.String(50), default='Open')
 
 class APInvoice(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -173,6 +134,20 @@ class Payment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.DateTime, default=datetime.utcnow)
     amount = db.Column(db.Float, nullable=False)
-    ref_type = db.Column(db.String(20))  # 'AR' or 'AP'
-    ref_id = db.Column(db.Integer)  # id of invoice
-    method = db.Column(db.String(50))  # Cash, Bank transfer, etc.
+    ref_type = db.Column(db.String(20))
+    ref_id = db.Column(db.Integer)
+    method = db.Column(db.String(50))
+    wht_amount = db.Column(db.Float, default=0.0)
+
+class CreditMemo(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.DateTime, default=datetime.utcnow)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
+    ar_invoice_id = db.Column(db.Integer, db.ForeignKey('ar_invoice.id'), nullable=True)
+    reason = db.Column(db.String(300))
+    amount_net = db.Column(db.Float, nullable=False)
+    vat = db.Column(db.Float, nullable=False)
+    total_amount = db.Column(db.Float, nullable=False)
+    # Relationships
+    customer = db.relationship('Customer')
+    ar_invoice = db.relationship('ARInvoice')
