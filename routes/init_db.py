@@ -6,6 +6,7 @@ from app import create_app, VAT_RATE
 from models import db, Product, Sale, Purchase, Account, JournalEntry
 import os
 import json # You need this for json.dumps later in the script
+from models import CompanyProfile
 
 app = create_app()
 app.app_context().push()
@@ -41,16 +42,21 @@ for p in products:
 db.session.commit()
 print('Initialized DB with sample products. VAT_RATE =', VAT_RATE)
 
+profile = CompanyProfile(name="Your Company Name Inc.", business_style="Retail",
+                         tin="000-000-000-00000 VAT", address="123 Business St., Makati City")
+db.session.add(profile)
 
 # Create basic chart of accounts
 # REMOVE: from models import Account, JournalEntry (They are already imported at the top)
 accounts = [
     ('101','Cash','Asset'),
     ('120','Inventory','Asset'),
+    ('121', 'Creditable Withholding Tax', 'Asset'),
     ('201','Accounts Payable','Liability'),
     ('301','Capital','Equity'),
     ('401','Sales Revenue','Revenue'),
     ('402','Other Revenue','Revenue'),
+    ('405', 'Sales Returns', 'Revenue'),
     ('501','COGS','Expense'),
     ('601','VAT Payable','Liability'),
     ('602','VAT Input','Asset'),
@@ -59,6 +65,8 @@ for code,name,typ in accounts:
     a = Account(code=code, name=name, type=typ)
     db.session.add(a)
 db.session.commit()
+
+print('Company profile and new accounts created.')
 
 # Optionally create a sample journal from existing sales/purchases to populate accounts
 # Sale, Purchase, and json are now defined from the imports at the top

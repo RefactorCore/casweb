@@ -1,14 +1,16 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file
 from flask_login import login_required, current_user
-from models import db, Customer, Supplier, ARInvoice, APInvoice, Payment, JournalEntry
+from models import db, Customer, Supplier, ARInvoice, APInvoice, Payment, JournalEntry, CreditMemo 
 import io, csv
 import json
+from .decorators import role_required
 
 ar_ap_bp = Blueprint('ar_ap', __name__, url_prefix='')
 
 
 @ar_ap_bp.route('/customers', methods=['GET', 'POST'])
 @login_required
+@role_required('Admin', 'Accountant')
 def customers():
     if request.method == 'POST':
         name = request.form.get('name')
@@ -28,6 +30,7 @@ def customers():
 
 @ar_ap_bp.route('/suppliers', methods=['GET', 'POST'])
 @login_required
+@role_required('Admin', 'Accountant')
 def suppliers():
     if request.method == 'POST':
         name = request.form.get('name')
@@ -47,6 +50,7 @@ def suppliers():
 
 @ar_ap_bp.route('/ar-invoices', methods=['GET', 'POST'])
 @login_required
+@role_required('Admin', 'Accountant')
 def ar_invoices():
     """
     Create AR invoice (credit sale). Creates a JournalEntry:
@@ -87,6 +91,7 @@ def ar_invoices():
 
 @ar_ap_bp.route('/ap-invoices', methods=['GET', 'POST'])
 @login_required
+@role_required('Admin', 'Accountant')
 def ap_invoices():
     """
     Create AP invoice (credit purchase). Creates a JournalEntry:
@@ -128,8 +133,8 @@ def ap_invoices():
 @login_required
 def record_payment():
     """
-    Record payment for AR or AP and create corresponding journal entry:
-      AR payment: Debit Cash, Credit Accounts Receivable
+    Record payment for AR or AP and create corresponding journal entry.
+      AR payment: Debit Cash, Debit CWT, Credit Accounts Receivable
       AP payment: Debit Accounts Payable, Credit Cash
     """
     ref_type = request.form.get('ref_type')
@@ -139,23 +144,29 @@ def record_payment():
         flash('Invalid reference id'); return redirect(url_for('ar_ap.customers'))
     amount = float(request.form.get('amount') or 0)
     method = request.form.get('method') or 'Cash'
+    wht_amount = 0.0 # Withholding Tax
 
     if amount <= 0:
         flash('Amount must be > 0'); return redirect(url_for('ar_ap.customers'))
 
-    p = Payment(amount=round(amount, 2), ref_type=ref_type, ref_id=ref_id, method=method)
-    db.session.add(p)
-
     if ref_type == 'AR':
         inv = ARInvoice.query.get(ref_id)
+        if inv and inv.customer and inv.customer.wht_rate_percent > 0:
+            # Calculate Withholding Tax based on amount net of VAT
+            wht_base = (amount / 1.12) # Assuming 12% VAT
+            wht_amount = round(wht_base * (inv.customer.wht_rate_percent / 100.0), 2)
+        
         if inv:
-            inv.paid += amount
+            inv.paid += (amount + wht_amount)
             inv.status = 'Paid' if inv.paid >= inv.total else 'Partially Paid'
-        # JE: Debit Cash, Credit Accounts Receivable
+            
+        # JE: Debit Cash, Debit CWT, Credit Accounts Receivable
         je_lines = [
             {'account': 'Cash', 'debit': round(amount, 2), 'credit': 0},
-            {'account': 'Accounts Receivable', 'debit': 0, 'credit': round(amount, 2)}
+            {'account': 'Creditable Withholding Tax', 'debit': round(wht_amount, 2), 'credit': 0},
+            {'account': 'Accounts Receivable', 'debit': 0, 'credit': round(amount + wht_amount, 2)}
         ]
+        
     elif ref_type == 'AP':
         inv = APInvoice.query.get(ref_id)
         if inv:
@@ -169,11 +180,78 @@ def record_payment():
     else:
         flash('Unknown ref type'); db.session.rollback(); return redirect(url_for('ar_ap.customers'))
 
-    je = JournalEntry(description=f'Payment {p.id} for {ref_type} #{ref_id}', entries_json=json.dumps(je_lines))
+    # Save the payment record
+    p = Payment(amount=round(amount, 2), ref_type=ref_type, ref_id=ref_id, method=method, wht_amount=wht_amount)
+    db.session.add(p)
+
+    je = JournalEntry(description=f'Payment for {ref_type} #{ref_id}', entries_json=json.dumps(je_lines))
     db.session.add(je)
     db.session.commit()
     flash('Payment recorded and journal entry created.')
-    return redirect(url_for('ar_ap.customers'))
+    # Redirect based on where payment was made from
+    return redirect(request.referrer or url_for('ar_ap.ar_invoices'))
+
+# --- ADD THIS NEW ROUTE ---
+@ar_ap_bp.route('/credit-memos', methods=['GET', 'POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def credit_memos():
+    """
+    Create a Credit Memo for a sales return/allowance.
+    Journal Entry:
+      Debit Sales Returns
+      Debit VAT Payable
+      Credit Accounts Receivable
+    """
+    if request.method == 'POST':
+        customer_id = int(request.form.get('customer_id'))
+        ar_invoice_id = int(request.form.get('ar_invoice_id') or 0) or None
+        reason = request.form.get('reason')
+        total_amount = float(request.form.get('total_amount') or 0)
+
+        if not customer_id or total_amount <= 0:
+            flash('Customer and a valid amount are required.', 'danger')
+            return redirect(url_for('ar_ap.credit_memos'))
+
+        # Calculate net and VAT (assuming 12% VAT)
+        amount_net = round(total_amount / 1.12, 2)
+        vat = round(total_amount - amount_net, 2)
+
+        cm = CreditMemo(
+            customer_id=customer_id,
+            ar_invoice_id=ar_invoice_id,
+            reason=reason,
+            amount_net=amount_net,
+            vat=vat,
+            total_amount=total_amount
+        )
+        db.session.add(cm)
+        db.session.flush()
+
+        # Adjust original invoice if linked
+        if ar_invoice_id:
+            inv = ARInvoice.query.get(ar_invoice_id)
+            if inv:
+                # This is a simplification; a real system might apply the credit to payments.
+                # For now, we reduce the total.
+                inv.total = max(0, inv.total - total_amount)
+
+        # Journal Entry
+        je_lines = [
+            {'account': 'Sales Returns', 'debit': amount_net, 'credit': 0},
+            {'account': 'VAT Payable', 'debit': vat, 'credit': 0}, # Debit to reduce liability
+            {'account': 'Accounts Receivable', 'debit': 0, 'credit': total_amount}
+        ]
+        je = JournalEntry(description=f'Credit Memo #{cm.id} for {reason}', entries_json=json.dumps(je_lines))
+        db.session.add(je)
+        db.session.commit()
+        flash('Credit Memo created successfully.', 'success')
+        return redirect(url_for('ar_ap.credit_memos'))
+
+    memos = CreditMemo.query.order_by(CreditMemo.date.desc()).all()
+    customers = Customer.query.order_by(Customer.name).all()
+    invoices = ARInvoice.query.filter(ARInvoice.status != 'Paid').order_by(ARInvoice.id.desc()).all()
+    return render_template('credit_memos.html', memos=memos, customers=customers, invoices=invoices)
 
 
 @ar_ap_bp.route('/export/ar.csv')

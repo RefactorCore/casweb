@@ -1,19 +1,74 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file, Response
-from models import db, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file, Response, session
+from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry
 import json
 from config import Config
 from datetime import datetime, timedelta
 from sqlalchemy import func
-from models import Sale
+from models import Sale, CompanyProfile, User
 import io, csv, json
 from io import StringIO
 from routes.utils import paginate_query
-
+from passlib.hash import pbkdf2_sha256
+from flask_login import login_user, logout_user, login_required, current_user
+from routes.decorators import role_required
 
 core_bp = Blueprint('core', __name__)
 VAT_RATE = Config.VAT_RATE
 
 
+@core_bp.route('/setup/license', methods=['GET', 'POST'])
+def setup_license():
+    if request.method == 'POST':
+        license_key = request.form.get('license_key')
+        if license_key == 'test123':
+            session['validated_license_key'] = license_key
+            return redirect(url_for('core.setup_company'))
+        else:
+            flash('Invalid license key. Please use the testing key.', 'danger')
+    return render_template('setup/license.html')
+
+
+@core_bp.route('/setup/company', methods=['GET', 'POST'])
+def setup_company():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        tin = request.form.get('tin')
+        address = request.form.get('address')
+        style = request.form.get('business_style')
+
+        if not name or not tin or not address:
+            flash('Please fill out all company details.', 'warning')
+            return redirect(url_for('core.setup_company'))
+
+        license_key = session.pop('validated_license_key', None)
+
+        profile = CompanyProfile(name=name, tin=tin, address=address, business_style=style)
+        db.session.add(profile)
+        db.session.commit()
+        return redirect(url_for('core.setup_admin'))
+    return render_template('setup/company.html')
+
+
+@core_bp.route('/setup/admin', methods=['GET', 'POST'])
+def setup_admin():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        if not username or not password:
+            flash('Username and password cannot be empty.', 'warning')
+            return redirect(url_for('core.setup_admin'))
+
+        hashed_password = pbkdf2_sha256.hash(password)
+        admin_user = User(username=username, password_hash=hashed_password, role='Admin')
+        db.session.add(admin_user)
+        db.session.commit()
+
+        # Log the new admin in automatically
+        login_user(admin_user)
+        flash('Setup complete! Welcome to your new accounting system.', 'success')
+        return redirect(url_for('core.index'))
+    return render_template('setup/admin.html')
 
 @core_bp.route('/')
 def index():
@@ -192,6 +247,7 @@ def api_add_multiple_products():
 
 
 @core_bp.route('/purchase', methods=['GET', 'POST'])
+@role_required('Admin', 'Accountant', 'Cashier')
 def purchase():
     if request.method == 'POST':
         try:
@@ -313,6 +369,7 @@ def view_purchase(purchase_id):
 
 
 @core_bp.route('/pos')
+@role_required('Admin', 'Cashier')
 def pos():
     # --- Handle GET (view with pagination and search) ---
     search = request.args.get('search', '').strip()
@@ -501,6 +558,7 @@ def view_sale(sale_id):
     return render_template('view_sale.html', sale=sale, items=items)
 
 @core_bp.route('/reports')
+@role_required('Admin', 'Accountant')
 def reports():
     """Display all journal entries with filters and summary."""
     # --- 1. Get Filters ---
@@ -1017,3 +1075,52 @@ def export_balance_sheet():
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+# --- ADD THIS LOGIN ROUTE ---
+@core_bp.route('/login', methods=['GET', 'POST'])
+def login():
+    """Handles user login."""
+    if current_user.is_authenticated:
+        return redirect(url_for('core.index'))
+
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        user = User.query.filter_by(username=username).first()
+
+        if user and pbkdf2_sha256.verify(password, user.password_hash):
+            login_user(user)
+            flash('Logged in successfully!', 'success')
+            return redirect(url_for('core.index'))
+        else:
+            flash('Invalid username or password.', 'danger')
+
+    return render_template('login.html')
+
+
+@core_bp.route('/logout')
+@login_required
+def logout():
+    """Handles user logout."""
+    logout_user()
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('core.login')) # This line will now work
+
+@core_bp.route('/settings', methods=['GET', 'POST'])
+@login_required
+@role_required('Admin')
+def settings():
+    # We assume only one company profile exists
+    profile = CompanyProfile.query.first_or_404()
+    if request.method == 'POST':
+        profile.name = request.form.get('name')
+        profile.tin = request.form.get('tin')
+        profile.address = request.form.get('address')
+        profile.business_style = request.form.get('business_style')
+        db.session.commit()
+        flash('Company profile updated successfully!', 'success')
+        return redirect(url_for('core.settings'))
+    
+    all_users = User.query.order_by(User.username).all()
+    return render_template('settings.html', profile=profile, users=all_users)
