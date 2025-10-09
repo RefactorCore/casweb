@@ -6,7 +6,6 @@
 <div class="container my-4">
   <h2 class="mb-4">📊 Dashboard Overview</h2>
 
-  <!-- Summary Cards -->
   <div class="row g-3 mb-4">
     <div class="col-md-3">
       <div class="card shadow-sm text-center border-primary">
@@ -42,15 +41,38 @@
     </div>
   </div>
 
-  <!-- Chart -->
-  <div class="card shadow-sm mb-4">
-    <div class="card-body">
-      <h5 class="card-title mb-3">Sales (Last 7 Days)</h5>
-      <canvas id="salesChart" height="100"></canvas>
+  <div class="row g-3 mb-4">
+    <div class="col-md-8">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <h5 class="card-title mb-3">Sales (Last 7 Days)</h5>
+          <canvas id="salesChart" height="100"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100">
+          <div class="card-header bg-warning text-dark fw-bold">
+              <i class="bi bi-star-fill me-2"></i>Top 5 Selling Products
+          </div>
+          <div class="card-body">
+              <ul class="list-group list-group-flush">
+                  {% for name, qty in top_sellers %}
+                      <li class="list-group-item d-flex justify-content-between align-items-center">
+                          {{ name }}
+                          <span class="badge bg-primary rounded-pill">{{ qty }} units sold</span>
+                      </li>
+                  {% else %}
+                      <li class="list-group-item text-muted">No sales data recorded yet.</li>
+                  {% endfor %}
+              </ul>
+          </div>
+      </div>
     </div>
   </div>
 
-  <!-- Inventory Table -->
+
   <h4 class="mt-5 mb-3">📦 Product Inventory</h4>
   <div class="table-responsive">
     <table class="table table-striped align-middle">
@@ -73,7 +95,6 @@
     </table>
   </div>
 
-  <!-- Low Stock -->
   <h5 class="mt-4">⚠️ Low Stock Alerts</h5>
   <ul class="list-group">
     {% for p in low_stock %}

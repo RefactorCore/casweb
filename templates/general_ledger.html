@@ -5,7 +5,12 @@
     <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
         &larr; Back to Reports List
     </a>
-    <h2 class="fw-bold text-primary">📚 General Ledger Summary</h2>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="fw-bold text-primary mb-0">📚 General Ledger Summary</h2>
+        <a href="{{ url_for('core.export_general_ledger') }}" class="btn btn-success">
+            ⬇ Export CSV
+        </a>
+    </div>
     <p class="text-muted">Aggregated debit and credit totals for all accounts.</p>
 
     <div class="card shadow-sm">

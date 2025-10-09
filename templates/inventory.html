@@ -97,43 +97,36 @@
 
 <!-- Add Product Modal -->
 <div class="modal fade" id="addProductModal" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
     <div class="modal-content">
-      <form method="post">
-        <div class="modal-header">
-          <h5 class="modal-title"><i class="bi bi-box me-2"></i>Add New Product</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-boxes me-2"></i>Add Multiple Products</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="table-responsive">
+          <table class="table table-sm" id="multiProductTable">
+            <thead>
+              <tr>
+                <th style="width: 15%">SKU</th>
+                <th style="width: 35%">Name</th>
+                <th style="width: 15%">Sale Price</th>
+                <th style="width: 15%">Cost Price</th>
+                <th style="width: 10%">Quantity</th>
+                <th style="width: 10%"><button type="button" class="btn btn-sm btn-outline-success" onclick="addRow()">+</button></th>
+              </tr>
+            </thead>
+            <tbody>
+              </tbody>
+          </table>
         </div>
-        <div class="modal-body">
-          <div class="mb-3">
-            <label class="form-label">SKU</label>
-            <input name="sku" class="form-control" required>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Name</label>
-            <input name="name" class="form-control" required>
-          </div>
-          <div class="row">
-            <div class="col">
-              <label class="form-label">Sale Price</label>
-              <input name="sale_price" class="form-control" type="number" step="0.01" required>
-            </div>
-            <div class="col">
-              <label class="form-label">Cost Price</label>
-              <input name="cost_price" class="form-control" type="number" step="0.01" required>
-            </div>
-          </div>
-          <div class="mt-3">
-            <label class="form-label">Quantity</label>
-            <input name="quantity" class="form-control" type="number" value="0" required>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button type="submit" class="btn btn-primary">
-            <i class="bi bi-save me-1"></i>Save Product
-          </button>
-        </div>
-      </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-primary" onclick="submitMultipleProducts()">
+          <i class="bi bi-save me-1"></i>Save All Products
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -178,6 +171,87 @@
 
 <script>
 
+  // Function to add a new row to the table
+  function addRow() {
+      const tbody = document.getElementById('multiProductTable').querySelector('tbody');
+      const newRow = tbody.insertRow();
+      
+      newRow.innerHTML = `
+          <td><input type="text" class="form-control form-control-sm" name="sku" required></td>
+          <td><input type="text" class="form-control form-control-sm" name="name" required></td>
+          <td><input type="number" step="0.01" class="form-control form-control-sm" name="sale_price" required></td>
+          <td><input type="number" step="0.01" class="form-control form-control-sm" name="cost_price" required></td>
+          <td><input type="number" class="form-control form-control-sm" name="quantity" value="0" required></td>
+          <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">-</button></td>
+      `;
+  }
+
+  // Function to collect data and submit via AJAX
+  async function submitMultipleProducts() {
+      const table = document.getElementById('multiProductTable');
+      const rows = table.querySelector('tbody').rows;
+      const products = [];
+      
+      let isValid = true;
+      for (const row of rows) {
+          const inputs = row.querySelectorAll('input');
+          const product = {};
+          
+          inputs.forEach(input => {
+              product[input.name] = input.value;
+              // Basic validation check
+              if (input.required && !input.value) {
+                  isValid = false;
+              }
+          });
+
+          // Only push rows that actually have an SKU
+          if (product.sku && product.name) {
+               products.push(product);
+          }
+      }
+
+      if (!isValid) {
+          alert('Please fill out all required fields in all visible rows.');
+          return;
+      }
+      
+      if (products.length === 0) {
+           alert('No products to submit.');
+           return;
+      }
+
+      // Submit the data to the new API endpoint
+      const response = await fetch('/api/add_multiple_products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ products: products })
+      });
+
+      const data = await response.json();
+
+      if (data.status === 'ok') {
+          alert('Successfully added ' + data.count + ' products.');
+          new bootstrap.Modal(document.getElementById('addProductModal')).hide(); // Hide the modal
+          location.reload();
+      } else {
+          alert('Error adding products: ' + (data.error || 'Unknown error'));
+      }
+  }
+
+  // Ensure at least one row exists when the modal is opened
+  document.addEventListener('DOMContentLoaded', () => {
+      const modal = document.getElementById('addProductModal');
+      if (modal) {
+          modal.addEventListener('show.bs.modal', () => {
+              const tbody = document.getElementById('multiProductTable').querySelector('tbody');
+              // Clear previous rows and add one fresh row
+              tbody.innerHTML = '';
+              addRow(); 
+          });
+      }
+  });
+
   // 📝 Edit Product (opens modal)
   function editProduct(sku, name, sale, cost, qty) {
     document.getElementById('editSKU').value = sku;
@@ -197,6 +271,7 @@
         .catch(() => alert('Failed to delete.'));
     }
   }
+
 </script>
 {% include "_pagination.html" %}
 {% endblock %}

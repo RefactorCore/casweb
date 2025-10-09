@@ -6,8 +6,12 @@
     <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
         &larr; Back to Reports List
     </a>
-    <h2 class="fw-bold text-primary">📊 Balance Sheet</h2>
-    <p class="text-muted">Snapshot of Assets, Liabilities, and Equity.</p>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="fw-bold text-primary mb-0">📊 Balance Sheet</h2>
+        <a href="{{ url_for('core.export_balance_sheet') }}" class="btn btn-success">
+            ⬇ Export CSV
+        </a>
+    </div>
 
     <div class="row">
         <div class="col-md-6 mb-4">
