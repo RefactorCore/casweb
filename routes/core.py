@@ -45,6 +45,19 @@ def index():
 
     labels = [d.strftime('%b %d') for d in last_7_days]
 
+    # --- NEW: Top Selling Products (by Quantity Sold) ---
+    top_sellers = (
+        db.session.query(
+            Product.name,
+            func.sum(SaleItem.qty).label('total_qty_sold')
+        )
+        .join(SaleItem, Product.id == SaleItem.product_id)
+        .group_by(Product.name)
+        .order_by(func.sum(SaleItem.qty).desc())
+        .limit(5)
+        .all()
+    )
+
     return render_template(
         'index.html',
         products=products,
@@ -55,6 +68,8 @@ def index():
         net_income=net_income,
         labels=labels,
         sales_by_day=sales_by_day,
+        # 👇 NEW DATA PASSED TO TEMPLATE
+        top_sellers=top_sellers, 
     )
 
 
@@ -135,6 +150,45 @@ def delete_product(sku):
     db.session.commit()
     return jsonify({'status': 'deleted'})
 
+
+@core_bp.route('/api/add_multiple_products', methods=['POST'])
+def api_add_multiple_products():
+    from models import Product # Ensure Product is imported
+    data = request.json
+    products_data = data.get('products', [])
+    
+    if not products_data:
+        return jsonify({'error': 'No product data provided'}), 400
+
+    new_product_count = 0
+    
+    try:
+        for p_data in products_data:
+            # Basic validation
+            if not p_data.get('sku') or not p_data.get('name'):
+                continue
+            
+            # Check if SKU already exists
+            if Product.query.filter_by(sku=p_data.get('sku')).first():
+                 # Skip or update, for simplicity we will skip here
+                 continue 
+                 
+            new_prod = Product(
+                sku=p_data.get('sku'),
+                name=p_data.get('name'),
+                sale_price=float(p_data.get('sale_price') or 0),
+                cost_price=float(p_data.get('cost_price') or 0),
+                quantity=int(p_data.get('quantity') or 0)
+            )
+            db.session.add(new_prod)
+            new_product_count += 1
+            
+        db.session.commit()
+        return jsonify({'status': 'ok', 'count': new_product_count})
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 
 @core_bp.route('/purchase', methods=['GET', 'POST'])
@@ -655,6 +709,50 @@ def income_statement():
         net_income=net_income
     )
 
+@core_bp.route('/export_income_statement', methods=['GET'])
+def export_income_statement():
+    # Reuse the calculation logic from the income_statement view
+    journals = JournalEntry.query.all()
+
+    total_revenue = total_cogs = total_expense = 0
+
+    for j in journals:
+        for line in j.entries():
+            acc = line.get('account', '').lower()
+            debit = float(line.get('debit', 0))
+            credit = float(line.get('credit', 0))
+
+            if 'sales revenue' in acc:
+                total_revenue += credit
+            elif 'cogs' in acc:
+                total_cogs += debit
+            # Note: This list must match the one used in your /income_statement route
+            elif acc in ['rent expense', 'utilities expense', 'salaries expense', 'misc expense']:
+                total_expense += debit
+
+    gross_profit = total_revenue - total_cogs
+    net_income = gross_profit - total_expense
+
+    # --- Prepare CSV output ---
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    writer.writerow(["Description", "Amount (₱)"])
+    writer.writerow(["Sales Revenue", f"{total_revenue:.2f}"])
+    writer.writerow(["Cost of Goods Sold (COGS)", f"{-total_cogs:.2f}"])
+    writer.writerow(["Gross Profit", f"{gross_profit:.2f}"])
+    writer.writerow(["Operating Expenses", f"{-total_expense:.2f}"])
+    writer.writerow(["Net Income", f"{net_income:.2f}"])
+
+    output.seek(0)
+    filename = f"income_statement_{datetime.now().strftime('%Y%m%d')}.csv"
+    
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
 @core_bp.route('/api/product/<sku>')
 def api_product(sku):
     product = Product.query.filter_by(sku=sku).first()
@@ -714,6 +812,39 @@ def general_ledger():
     
     return render_template('general_ledger.html', gl_data=gl_with_balances)
 
+@core_bp.route('/export_general_ledger', methods=['GET'])
+def export_general_ledger():
+    # Reuse the logic from the general_ledger view
+    journals = JournalEntry.query.order_by(JournalEntry.created_at.asc()).all()
+    gl_summary = aggregate_journal_entries(journals)
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write header row
+    writer.writerow(["Account", "Total Debits", "Total Credits", "Balance", "Balance Type"])
+
+    # Write data rows
+    for account, totals in gl_summary.items():
+        balance = totals['debit'] - totals['credit']
+        balance_type = 'Debit' if balance >= 0 else 'Credit'
+        
+        writer.writerow([
+            account,
+            f"{totals['debit']:.2f}",
+            f"{totals['credit']:.2f}",
+            f"{balance:.2f}",
+            balance_type
+        ])
+
+    output.seek(0)
+    filename = f"general_ledger_summary_{datetime.now().strftime('%Y%m%d')}.csv"
+    
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 @core_bp.route('/balance_sheet')
 def balance_sheet():
@@ -794,4 +925,95 @@ def balance_sheet():
         total_liabilities=total_liabilities,
         total_equity=total_equity,
         total_liabilities_and_equity=total_liabilities_and_equity
+    )
+
+@core_bp.route('/export_balance_sheet', methods=['GET'])
+def export_balance_sheet():
+    # Reuse the calculation logic from the balance_sheet view
+    journals = JournalEntry.query.all()
+    gl_summary = aggregate_journal_entries(journals)
+    
+    # 2. Define account classifications (must match the view logic)
+    account_classes = {
+        'Asset': ['Cash', 'Inventory', 'Accounts Receivable'],
+        'Liability': ['Accounts Payable', 'VAT Payable'],
+        'Equity': ['Owner\'s Equity']
+    }
+    
+    # 3. Calculate Net Income (must match the view logic)
+    # Note: For production, this should be a dedicated utility function
+    total_revenue = total_cogs = total_expense = 0
+    for j in journals:
+        for line in j.entries():
+            acc = line.get('account', '').lower()
+            debit = float(line.get('debit', 0))
+            credit = float(line.get('credit', 0))
+            if 'sales revenue' in acc:
+                total_revenue += credit
+            elif 'cogs' in acc:
+                total_cogs += debit
+            elif 'expense' in acc: 
+                total_expense += debit
+
+    net_income = total_revenue - total_cogs - total_expense
+    
+    # 4. Group balances and calculate totals
+    assets_data = []
+    liabilities_data = []
+    equity_data = []
+    total_assets = 0.0
+    total_liabilities = 0.0
+    
+    for account, totals in gl_summary.items():
+        balance = totals['debit'] - totals['credit']
+        
+        if account in account_classes['Asset']:
+            assets_data.append({'account': account, 'balance': balance})
+            total_assets += balance
+        elif account in account_classes['Liability']:
+            liabilities_data.append({'account': account, 'balance': -balance})
+            total_liabilities += -balance
+        elif account in account_classes['Equity']:
+            equity_data.append({'account': account, 'balance': -balance})
+            
+    equity_data.append({'account': 'Current Period Net Income', 'balance': net_income})
+    total_equity = sum(e['balance'] for e in equity_data)
+    total_liabilities_and_equity = total_liabilities + total_equity
+    
+    # --- Prepare CSV output ---
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write Assets Section
+    writer.writerow(["ASSETS", ""])
+    for item in assets_data:
+        writer.writerow([item['account'], f"{item['balance']:.2f}"])
+    writer.writerow(["TOTAL ASSETS", f"{total_assets:.2f}"])
+    writer.writerow([]) # Blank line for separation
+    
+    # Write Liabilities Section
+    writer.writerow(["LIABILITIES", ""])
+    for item in liabilities_data:
+        writer.writerow([item['account'], f"{item['balance']:.2f}"])
+    writer.writerow(["TOTAL LIABILITIES", f"{total_liabilities:.2f}"])
+    writer.writerow([])
+    
+    # Write Equity Section
+    writer.writerow(["EQUITY", ""])
+    for item in equity_data:
+        writer.writerow([item['account'], f"{item['balance']:.2f}"])
+    writer.writerow(["TOTAL EQUITY", f"{total_equity:.2f}"])
+    writer.writerow([])
+    
+    # Write Summary Row
+    writer.writerow(["TOTAL LIABILITIES & EQUITY", f"{total_liabilities_and_equity:.2f}"])
+
+
+    output.seek(0)
+    filename = f"balance_sheet_{datetime.now().strftime('%Y%m%d')}.csv"
+    
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
