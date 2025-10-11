@@ -1,5 +1,5 @@
-Flask==2.2.5
-Flask-SQLAlchemy==3.0.3
-Flask-Login==0.6.2
-passlib==1.7.4
-pandas==2.1.2
+Flask
+Flask-SQLAlchemy
+Flask-Login
+passlib
+pandas

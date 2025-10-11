@@ -12,6 +12,8 @@ class CompanyProfile(db.Model):
     tin = db.Column(db.String(50), nullable=False)
     address = db.Column(db.String(300), nullable=False)
     license_key = db.Column(db.String(100))
+    next_or_number = db.Column(db.Integer, default=1)
+    next_si_number = db.Column(db.Integer, default=1)
 
 class Account(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -47,6 +49,8 @@ class Sale(db.Model):
     vat = db.Column(db.Float, nullable=False, default=0.0)
     status = db.Column(db.String(50), default='paid')
     items = db.relationship('SaleItem', backref='sale', cascade='all, delete-orphan')
+    document_number = db.Column(db.String(50), unique=True)
+    document_type = db.Column(db.String(10)) # To store 'OR' or 'SI'
 
 class SaleItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -151,3 +155,25 @@ class CreditMemo(db.Model):
     # Relationships
     customer = db.relationship('Customer')
     ar_invoice = db.relationship('ARInvoice')
+
+class StockAdjustment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    product = db.relationship('Product')
+    quantity_changed = db.Column(db.Integer, nullable=False) # e.g., -5 for loss, 10 for found
+    reason = db.Column(db.String(255), nullable=False) # e.g., 'Spoilage', 'Physical Count Correction'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    user = db.relationship('User')
+
+class AuditLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    user = db.relationship('User')
+    action = db.Column(db.String(255), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    ip_address = db.Column(db.String(45)) # To store user's IP
+
+    def __repr__(self):
+        username = self.user.username if self.user else 'System'
+        return f'<AuditLog {self.timestamp} - {username}: {self.action}>'

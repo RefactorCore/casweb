@@ -2,6 +2,7 @@
 from flask import Flask, redirect, url_for, request
 # --- FIX: Import current_user ---
 from flask_login import LoginManager, current_user
+from routes.accounts import accounts_bp
 
 
 from models import db, User, CompanyProfile
@@ -11,6 +12,7 @@ from datetime import datetime
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_object(Config)
+    app.register_blueprint(accounts_bp)
 
     db.init_app(app)
 
