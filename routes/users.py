@@ -3,6 +3,7 @@ from models import db, User
 from passlib.hash import pbkdf2_sha256
 from flask_login import login_required, current_user
 from .decorators import role_required
+from .utils import log_action
 
 user_bp = Blueprint('users', __name__, url_prefix='/users')
 
@@ -27,6 +28,7 @@ def create_user():
         password_hash=pbkdf2_sha256.hash(password),
         role=role
     )
+    log_action(f'Created new user: {username} with role: {role}.')
     db.session.add(new_user)
     db.session.commit()
     flash(f'User "{username}" created successfully.', 'success')
@@ -48,7 +50,8 @@ def update_user(user_id):
     # If a new password was provided, hash and update it
     if new_password:
         user.password_hash = pbkdf2_sha256.hash(new_password)
-    
+
+    log_action(f'Updated user: {user.username}. Changed role to {role}.')
     db.session.commit()
     flash(f'User "{user.username}" updated successfully.', 'success')
     return redirect(url_for('core.settings'))
@@ -66,6 +69,7 @@ def delete_user(user_id):
         flash('You cannot delete your own account.', 'danger')
         return redirect(url_for('core.settings'))
 
+    log_action(f'Deleted user: {user.username}.')
     flash(f'User "{user.username}" has been deleted.', 'success')
     db.session.delete(user)
     db.session.commit()

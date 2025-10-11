@@ -1,11 +1,11 @@
 from flask import Blueprint, render_template, request
 from flask_login import login_required
 # Add CompanyProfile, Customer, Supplier, CreditMemo
-from models import db, JournalEntry, Account, Sale, Purchase, Product, ARInvoice, APInvoice, CompanyProfile, Customer, Supplier, CreditMemo, Payment
+from models import db, JournalEntry, Account, Sale, Purchase, Product, ARInvoice, APInvoice, CompanyProfile, Customer, Supplier, CreditMemo, Payment, SaleItem, PurchaseItem
 from collections import defaultdict
 import json
-from sqlalchemy import func, extract
-from datetime import datetime
+from sqlalchemy import func, extract, cast, Date
+from datetime import datetime, date
 from routes.decorators import role_required
 
 reports_bp = Blueprint('reports', __name__, url_prefix='/reports')
@@ -248,3 +248,118 @@ def form_2307_report():
     return render_template('form_2307_report.html', customers=customers, 
                            selected_customer_id=selected_customer_id,
                            month=month, payments=payments, customer=customer, company=company)
+
+@reports_bp.route('/ar-aging')
+@login_required
+@role_required('Admin', 'Accountant')
+def ar_aging():
+    """Generates an Accounts Receivable Aging report."""
+    today = date.today()
+    invoices = ARInvoice.query.filter(ARInvoice.status != 'Paid').all()
+    
+    aging_data = {
+        'current': [], '1-30': [], '31-60': [], '61-90': [], '91+': []
+    }
+    totals = { 'current': 0, '1-30': 0, '31-60': 0, '61-90': 0, '91+': 0, 'total': 0 }
+
+    for inv in invoices:
+        due_date = inv.date.date() # Convert datetime to date
+        age = (today - due_date).days
+        balance = inv.total - inv.paid
+        totals['total'] += balance
+
+        if age <= 0:
+            aging_data['current'].append(inv)
+            totals['current'] += balance
+        elif 1 <= age <= 30:
+            aging_data['1-30'].append(inv)
+            totals['1-30'] += balance
+        elif 31 <= age <= 60:
+            aging_data['31-60'].append(inv)
+            totals['31-60'] += balance
+        elif 61 <= age <= 90:
+            aging_data['61-90'].append(inv)
+            totals['61-90'] += balance
+        else:
+            aging_data['91+'].append(inv)
+            totals['91+'] += balance
+            
+    return render_template('ar_aging.html', aging_data=aging_data, totals=totals)
+
+@reports_bp.route('/ap-aging')
+@login_required
+@role_required('Admin', 'Accountant')
+def ap_aging():
+    """Generates an Accounts Payable Aging report."""
+    today = date.today()
+    invoices = APInvoice.query.filter(APInvoice.status != 'Paid').all()
+
+    aging_data = {
+        'current': [], '1-30': [], '31-60': [], '61-90': [], '91+': []
+    }
+    totals = { 'current': 0, '1-30': 0, '31-60': 0, '61-90': 0, '91+': 0, 'total': 0 }
+
+    for inv in invoices:
+        due_date = inv.date.date()
+        age = (today - due_date).days
+        balance = inv.total - inv.paid
+        totals['total'] += balance
+
+        if age <= 0:
+            aging_data['current'].append(inv)
+            totals['current'] += balance
+        elif 1 <= age <= 30:
+            aging_data['1-30'].append(inv)
+            totals['1-30'] += balance
+        elif 31 <= age <= 60:
+            aging_data['31-60'].append(inv)
+            totals['31-60'] += balance
+        elif 61 <= age <= 90:
+            aging_data['61-90'].append(inv)
+            totals['61-90'] += balance
+        else:
+            aging_data['91+'].append(inv)
+            totals['91+'] += balance
+
+    return render_template('ap_aging.html', aging_data=aging_data, totals=totals)
+
+@reports_bp.route('/stock-card/<int:product_id>')
+@login_required
+@role_required('Admin', 'Accountant')
+def stock_card(product_id):
+    """Generates an inventory stock card for a specific product."""
+    product = Product.query.get_or_404(product_id)
+    
+    sales = SaleItem.query.filter_by(product_id=product.id).all()
+    purchases = PurchaseItem.query.filter_by(product_id=product.id).all()
+    
+    # Combine and sort transactions by date
+    transactions = []
+    for s in sales:
+        transactions.append({
+            'date': s.sale.created_at,
+            'type': 'Sale',
+            'ref_id': s.sale_id,
+            'qty_in': 0,
+            'qty_out': s.qty,
+            'cost': product.cost_price # Use current cost for simplicity
+        })
+    for p in purchases:
+         transactions.append({
+            'date': p.purchase.created_at,
+            'type': 'Purchase',
+            'ref_id': p.purchase_id,
+            'qty_in': p.qty,
+            'qty_out': 0,
+            'cost': p.unit_cost
+        })
+        
+    transactions.sort(key=lambda x: x['date'])
+    
+    # Calculate running balance
+    running_balance = 0
+    for t in transactions:
+        running_balance += t['qty_in'] - t['qty_out']
+        t['balance'] = running_balance
+        
+    return render_template('stock_card.html', product=product, transactions=transactions)

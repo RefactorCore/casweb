@@ -3,14 +3,15 @@ from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, Jo
 import json
 from config import Config
 from datetime import datetime, timedelta
-from sqlalchemy import func
-from models import Sale, CompanyProfile, User
+from sqlalchemy import func, exc 
+from models import Sale, CompanyProfile, User, AuditLog
 import io, csv, json
 from io import StringIO
 from routes.utils import paginate_query
 from passlib.hash import pbkdf2_sha256
 from flask_login import login_user, logout_user, login_required, current_user
 from routes.decorators import role_required
+from .utils import log_action
 
 core_bp = Blueprint('core', __name__)
 VAT_RATE = Config.VAT_RATE
@@ -69,38 +70,91 @@ def setup_admin():
         flash('Setup complete! Welcome to your new accounting system.', 'success')
         return redirect(url_for('core.index'))
     return render_template('setup/admin.html')
-
+    
 @core_bp.route('/')
 def index():
     # --- Base data ---
     products = Product.query.all()
     low_stock = [p for p in products if p.quantity <= 5]
 
-    # --- Summary data ---
+    # --- Summary data (ALL TIME) ---
     total_sales = db.session.query(func.sum(Sale.total)).scalar() or 0
     total_purchases = db.session.query(func.sum(Purchase.total)).scalar() or 0
     total_inventory_value = sum(p.cost_price * p.quantity for p in products)
 
-    # --- Income summary ---
+    # --- Income summary (ALL TIME) ---
     net_income = total_sales - total_purchases
+    
+    # --- Last 30 Days and Last 12 Hours Summary Data ---
+    today = datetime.utcnow()
+    last_30_days_ago = today - timedelta(days=30)
+    last_12_hours_ago = today - timedelta(hours=12)
 
-    # --- Chart data (sales trend over 7 days) ---
-    today = datetime.utcnow().date()
-    last_7_days = [today - timedelta(days=i) for i in range(6, -1, -1)]
+    sales_30d = db.session.query(func.sum(Sale.total)).filter(
+        Sale.created_at >= last_30_days_ago
+    ).scalar() or 0
+    purchases_30d = db.session.query(func.sum(Purchase.total)).filter(
+        Purchase.created_at >= last_30_days_ago
+    ).scalar() or 0
+    net_income_30d = sales_30d - purchases_30d
 
-    sales_by_day = []
-    for day in last_7_days:
-        day_total = (
-            db.session.query(func.sum(Sale.total))
-            .filter(func.date(Sale.created_at) == day)
-            .scalar()
-            or 0
-        )
-        sales_by_day.append(day_total)
+    sales_12h = db.session.query(func.sum(Sale.total)).filter(
+        Sale.created_at >= last_12_hours_ago
+    ).scalar() or 0
+    purchases_12h = db.session.query(func.sum(Purchase.total)).filter(
+        Purchase.created_at >= last_12_hours_ago
+    ).scalar() or 0
+    net_income_12h = sales_12h - purchases_12h
 
-    labels = [d.strftime('%b %d') for d in last_7_days]
+    # 📈 --- MODIFIED: Chart data (sales trend by 12H, 7D, or 30D) ---
+    # Get 'period' parameter from URL, default to 7 if not present or invalid
+    period = request.args.get('period', '7')
+    
+    sales_by_period = []
+    labels = []
+    current_filter_label = ''
 
-    # --- NEW: Top Selling Products (by Quantity Sold) ---
+    if period == '12':
+        current_filter_label = 'Last 12 Hours'
+        # Generate 12 hourly intervals ending with the current hour
+        intervals = [today - timedelta(hours=i) for i in range(11, -1, -1)]
+        
+        for hour_start in intervals:
+            hour_end = hour_start + timedelta(hours=1)
+            hour_total = (
+                db.session.query(func.sum(Sale.total))
+                .filter(Sale.created_at >= hour_start)
+                .filter(Sale.created_at < hour_end)
+                .scalar()
+                or 0
+            )
+            sales_by_period.append(hour_total)
+            labels.append(hour_start.strftime('%I%p')) # e.g., 09AM, 10PM
+
+    else: # Default to 7 days, or use 30 days
+        if period == '30':
+            days = 30
+            current_filter_label = 'Last 30 Days'
+        else:
+            days = 7
+            current_filter_label = 'Last 7 Days'
+            
+        today_date = datetime.utcnow().date()
+        last_n_days = [today_date - timedelta(days=i) for i in range(days - 1, -1, -1)]
+
+        for day in last_n_days:
+            day_total = (
+                db.session.query(func.sum(Sale.total))
+                .filter(func.date(Sale.created_at) == day)
+                .scalar()
+                or 0
+            )
+            sales_by_period.append(day_total)
+            labels.append(day.strftime('%b %d'))
+
+    # -------------------
+
+    # --- Top Selling Products (by Quantity Sold) ---
     top_sellers = (
         db.session.query(
             Product.name,
@@ -122,9 +176,14 @@ def index():
         total_inventory_value=total_inventory_value,
         net_income=net_income,
         labels=labels,
-        sales_by_day=sales_by_day,
-        # 👇 NEW DATA PASSED TO TEMPLATE
-        top_sellers=top_sellers, 
+        sales_by_day=sales_by_period, # Pass the dynamic data here
+        top_sellers=top_sellers,
+        sales_30d=sales_30d,
+        net_income_30d=net_income_30d,
+        sales_24h=sales_12h, 
+        net_income_24h=net_income_12h,
+        current_period_filter=period, # NEW: Pass the current filter value
+        current_filter_label=current_filter_label # NEW: Pass the label for the title
     )
 
 
@@ -189,6 +248,7 @@ def update_product():
     product.cost_price = float(request.form.get('cost_price') or 0)
     product.quantity = int(request.form.get('quantity') or 0)
 
+    log_action(f'Updated product SKU: {product.sku}, Name: {product.name}.')
     db.session.commit()
     flash(f'Product {product.sku} updated successfully.', 'success')
     return redirect(url_for('core.inventory'))
@@ -400,49 +460,86 @@ def pos():
 def api_sale():
     data = request.json
     items = data.get('items', [])
-    sale = Sale(total=0, vat=0)
-    db.session.add(sale)
-    db.session.flush()
+    doc_type = data.get('doc_type', 'OR') # Assumes frontend will send this, defaults to 'OR'
 
-    total = vat_total = cogs_total = 0
-    for it in items:
-        sku = it['sku']
-        qty = int(it['qty'])
-        product = Product.query.filter_by(sku=sku).first()
-        if not product:
-            return jsonify({'error': f'Product {sku} not found'}), 404
-        if product.quantity < qty:
-            return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
+    if not items:
+        return jsonify({'error': 'No items in sale'}), 400
 
-        line_net = qty * product.sale_price
-        vat = round(line_net * VAT_RATE, 2)
-        line_total = line_net + vat
-        cogs = qty * product.cost_price
+    try:
+        # --- NEW: Get the next document number ---
+        profile = CompanyProfile.query.first()
+        if not profile:
+            # Important: You must have a company profile in your database for this to work
+            return jsonify({'error': 'Company profile not set up in settings'}), 500
 
-        db.session.add(SaleItem(
-            sale_id=sale.id, product_id=product.id,
-            product_name=product.name, sku=sku,
-            qty=qty, unit_price=product.sale_price,
-            line_total=line_total, cogs=cogs
-        ))
+        if doc_type == 'SI':
+            doc_num = profile.next_si_number
+            profile.next_si_number += 1 # Increment for the next sale
+            full_doc_number = f"SI-{doc_num:06d}" # Formats to SI-000001
+        else: # Default to OR
+            doc_num = profile.next_or_number
+            profile.next_or_number += 1 # Increment for the next sale
+            full_doc_number = f"OR-{doc_num:06d}" # Formats to OR-000001
+        
+        # --- MODIFIED: Pass the new document info when creating the Sale ---
+        sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type=doc_type)
+        db.session.add(sale)
+        db.session.flush()
 
-        product.quantity -= qty
-        total += line_total
-        vat_total += vat
-        cogs_total += cogs
+        total = vat_total = cogs_total = 0
+        for it in items:
+            sku = it['sku']
+            qty = int(it['qty'])
+            product = Product.query.filter_by(sku=sku).first()
+            if not product:
+                # Rollback to prevent leaving an empty sale record
+                db.session.rollback()
+                return jsonify({'error': f'Product {sku} not found'}), 404
+            if product.quantity < qty:
+                db.session.rollback()
+                return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
-    sale.total, sale.vat = total, vat_total
+            line_net = qty * product.sale_price
+            vat = round(line_net * VAT_RATE, 2)
+            line_total = line_net + vat
+            cogs = qty * product.cost_price
 
-    je_lines = [
-        {'account': 'Cash', 'debit': total, 'credit': 0},
-        {'account': 'Sales Revenue', 'debit': 0, 'credit': total - vat_total},
-        {'account': 'VAT Payable', 'debit': 0, 'credit': vat_total},
-        {'account': 'COGS', 'debit': cogs_total, 'credit': 0},
-        {'account': 'Inventory', 'debit': 0, 'credit': cogs_total},
-    ]
-    db.session.add(JournalEntry(description=f'Sale #{sale.id}', entries_json=json.dumps(je_lines)))
-    db.session.commit()
-    return jsonify({'status': 'ok', 'sale_id': sale.id})
+            db.session.add(SaleItem(
+                sale_id=sale.id, product_id=product.id,
+                product_name=product.name, sku=sku,
+                qty=qty, unit_price=product.sale_price,
+                line_total=line_total, cogs=cogs
+            ))
+
+            product.quantity -= qty
+            total += line_total
+            vat_total += vat
+            cogs_total += cogs
+
+        sale.total, sale.vat = total, vat_total
+
+        je_lines = [
+            {'account': 'Cash', 'debit': total, 'credit': 0},
+            {'account': 'Sales Revenue', 'debit': 0, 'credit': total - vat_total},
+            {'account': 'VAT Payable', 'debit': 0, 'credit': vat_total},
+            {'account': 'COGS', 'debit': cogs_total, 'credit': 0},
+            {'account': 'Inventory', 'debit': 0, 'credit': cogs_total},
+        ]
+        # --- MODIFIED: Update Journal Entry description ---
+        db.session.add(JournalEntry(description=f'Sale #{sale.id} ({full_doc_number})', entries_json=json.dumps(je_lines)))
+        
+        db.session.commit()
+        
+        # --- MODIFIED: Return the new document number to the frontend ---
+        return jsonify({'status': 'ok', 'sale_id': sale.id, 'receipt_number': full_doc_number})
+
+    # --- NEW: Error handling for database issues ---
+    except exc.IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Failed to generate unique document number. Please try again.'}), 500
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 
 @core_bp.route('/sales')
@@ -1091,6 +1188,7 @@ def login():
 
         if user and pbkdf2_sha256.verify(password, user.password_hash):
             login_user(user)
+            log_action(f'User logged in successfully.')
             flash('Logged in successfully!', 'success')
             return redirect(url_for('core.index'))
         else:
@@ -1124,3 +1222,71 @@ def settings():
     
     all_users = User.query.order_by(User.username).all()
     return render_template('settings.html', profile=profile, users=all_users)
+
+@core_bp.route('/inventory/adjust', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def adjust_stock():
+    product_id = int(request.form.get('product_id'))
+    quantity = int(request.form.get('quantity'))
+    reason = request.form.get('reason')
+    
+    product = Product.query.get_or_404(product_id)
+
+    if not reason:
+        flash('A reason for the adjustment is required.', 'danger')
+        return redirect(url_for('core.inventory'))
+
+    try:
+        # 1. Update Product Quantity
+        original_qty = product.quantity
+        product.quantity += quantity
+        
+        # 2. Create Stock Adjustment Log
+        adjustment = StockAdjustment(
+            product_id=product.id,
+            quantity_changed=quantity,
+            reason=reason,
+            user_id=current_user.id
+        )
+        db.session.add(adjustment)
+
+        # 3. Create Journal Entry
+        adjustment_value = abs(quantity) * product.cost_price
+        
+        if quantity < 0: # Stock reduction (loss)
+            debit_account = "Inventory Loss" # Make sure this account exists
+            credit_account = "Inventory"
+            desc = f"Stock loss for {product.name}: {reason}"
+        else: # Stock increase (gain)
+            debit_account = "Inventory"
+            credit_account = "Inventory Gain" # Make sure this account exists
+            desc = f"Stock gain for {product.name}: {reason}"
+
+        je_lines = [
+            {"account": debit_account, "debit": adjustment_value, "credit": 0},
+            {"account": credit_account, "debit": 0, "credit": adjustment_value}
+        ]
+        journal = JournalEntry(description=desc, entries_json=json.dumps(je_lines))
+        db.session.add(journal)
+
+        log_action(f'Adjusted stock for {product.name} by {quantity}. Reason: {reason}.')
+        db.session.commit()
+        flash(f'Stock for {product.name} adjusted successfully.', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error adjusting stock: {str(e)}', 'danger')
+        
+    return redirect(url_for('core.inventory'))
+
+
+# Add this new route for viewing the logs
+@core_bp.route('/audit-log')
+@login_required
+@role_required('Admin')
+def audit_log():
+    """Display the audit log."""
+    page = request.args.get('page', 1, type=int)
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).paginate(page=page, per_page=25)
+    return render_template('audit_log.html', logs=logs)
