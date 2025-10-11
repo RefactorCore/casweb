@@ -20,11 +20,18 @@
 
 <div class="container-fluid mt-3">
   <div class="page-header">
-    <h2><i class="bi bi-box-seam me-2"></i>Inventory</h2>
+  <h2><i class="bi bi-box-seam me-2"></i>Inventory</h2>
+
+  <div>
     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProductModal">
       <i class="bi bi-plus-circle me-1"></i> Add Product
     </button>
+
+    <button class="btn btn-warning ms-2" data-bs-toggle="modal" data-bs-target="#adjustStockModal">
+      <i class="bi bi-arrow-down-up me-1"></i> Adjust Stock
+    </button>
   </div>
+</div>
 
   <!-- Search and Filters -->
 <div class="card mb-3">
@@ -79,6 +86,9 @@
                 {% endif %}
               </td>
               <td>
+                <a href="{{ url_for('reports.stock_card', product_id=p.id) }}" class="btn btn-sm btn-outline-info" title="View Stock Card">
+                    <i class="bi bi-card-list"></i>
+                </a>
                 <button class="btn btn-sm btn-outline-secondary" onclick="editProduct('{{ p.sku }}','{{ p.name }}',{{ p.sale_price }},{{ p.cost_price }},{{ p.quantity }})">
                   <i class="bi bi-pencil"></i>
                 </button>
@@ -91,6 +101,43 @@
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="adjustStockModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form action="{{ url_for('core.adjust_stock') }}" method="POST">
+        <div class="modal-header">
+          <h5 class="modal-title">Adjust Inventory Stock</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Product</label>
+            <select name="product_id" class="form-select" required>
+              <option value="">-- Select a Product --</option>
+              {% for p in products %}
+                <option value="{{ p.id }}">{{ p.name }} (Current: {{ p.quantity }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Quantity Change</label>
+            <input type="number" name="quantity" class="form-control" placeholder="e.g., -5 for loss, 10 for gain" required>
+            <div class="form-text">Use a negative number for removal, positive for addition.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Reason</label>
+            <input type="text" name="reason" class="form-control" placeholder="e.g., Spoilage, Physical Count" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Submit Adjustment</button>
+        </div>
+      </form>
     </div>
   </div>
 </div>

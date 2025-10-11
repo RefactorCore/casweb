@@ -84,7 +84,7 @@
       <a href="{{ url_for('core.pos') }}" class="{% if '/pos' in request.path %}active{% endif %}">
         <i class="bi bi-cart3 me-2"></i> POS
       </a>
-      <a href="{{ url_for('core.inventory') }}" class="{% if '/inventory' in request.path %}active{% endif %}">
+      <a href="{{ url_for('core.inventory') }}" class="{% if '/inventory' in request.path or '/stock-card' in request.path %}active{% endif %}">
         <i class="bi bi-box-seam me-2"></i> Inventory
       </a>
       <a href="{{ url_for('core.purchase') }}" class="{% if '/purchase' == request.path %}active{% endif %}">
@@ -96,13 +96,22 @@
       <a href="{{ url_for('core.sales') }}" class="{% if '/sales' in request.path %}active{% endif %}">
         <i class="bi bi-receipt-cutoff me-2"></i> Sales
       </a>
-      <a href="{{ url_for('core.reports') }}" class="{% if '/reports' in request.path %}active{% endif %}">
+      {% if current_user.role in ['Admin', 'Accountant'] %}
+       <a href="{{ url_for('core.reports') }}" class="{% if request.path == url_for('core.reports') %}active{% endif %}">
         <i class="bi bi-journal-text me-2"></i> Journals
       </a>
+      {% endif %}
+      {% if current_user.role in ['Admin', 'Accountant'] %}
+      <a href="{{ url_for('accounts.chart_of_accounts') }}" class="{% if '/accounts' in request.path %}active{% endif %}">
+        <i class="bi bi-list-columns-reverse me-2"></i> Chart of Accounts
+      </a>
+      {% endif %}
+      {% if current_user.role in ['Admin', 'Accountant'] %}
       <a href="{{ url_for('ar_ap.credit_memos') }}" class="{% if '/credit-memos' in request.path %}active{% endif %}">
         <i class="bi bi-file-earmark-minus me-2"></i> Credit Memos
       </a>
-
+      {% endif %}
+      {% if current_user.role in ['Admin', 'Accountant'] %}
       <a class="nav-link text-white" data-bs-toggle="collapse" href="#taxReportsSubmenu" role="button" aria-expanded="false" aria-controls="taxReportsSubmenu">
         <i class="bi bi-file-earmark-bar-graph me-2"></i> Tax Reports
       </a>
@@ -120,9 +129,17 @@
             - Form 2307 Data
           </a>
       </div>
+      {% endif %}
+      {% if current_user.role == 'Admin' %}
+      <a href="{{ url_for('core.audit_log') }}" class="{% if '/audit-log' in request.path %}active{% endif %}">
+        <i class="bi bi-shield-check me-2"></i> Audit Log
+      </a>
+      {% endif %}
+      {% if current_user.role == 'Admin' %}
       <a href="{{ url_for('core.settings') }}" class="{% if '/settings' in request.path %}active{% endif %}">
         <i class="bi bi-gear me-2"></i> Settings
       </a>
+      {% endif %}
       <!-- <a href="{{ url_for('core.vat_report') }}" class="{% if '/vat_report' in request.path %}active{% endif %}">
         <i class="bi bi-percent me-2"></i> VAT Report
       </a>

@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container my-4">
+    <h2 class="mb-4">Aging of Accounts Payable</h2>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover">
+                    <thead class="table-primary text-center">
+                        <tr>
+                            <th>Current</th>
+                            <th>1-30 Days</th>
+                            <th>31-60 Days</th>
+                            <th>61-90 Days</th>
+                            <th>91+ Days</th>
+                            <th>Total Due</th>
+                        </tr>
+                         <tr>
+                            <th>₱{{ totals['current'] | round(2) }}</th>
+                            <th>₱{{ totals['1-30'] | round(2) }}</th>
+                            <th>₱{{ totals['31-60'] | round(2) }}</th>
+                            <th>₱{{ totals['61-90'] | round(2) }}</th>
+                            <th>₱{{ totals['91+'] | round(2) }}</th>
+                            <th>₱{{ totals['total'] | round(2) }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for bucket in ['current', '1-30', '31-60', '61-90', '91+'] %}
+                            {% for inv in aging_data[bucket] %}
+                            <tr>
+                                {% set balance = inv.total - inv.paid %}
+                                <td {% if bucket == 'current' %}class="text-success"{% endif %}>{{ '₱' ~ (balance | round(2)) if bucket == 'current' else '' }}</td>
+                                <td>{{ '₱' ~ (balance | round(2)) if bucket == '1-30' else '' }}</td>
+                                <td>{{ '₱' ~ (balance | round(2)) if bucket == '31-60' else '' }}</td>
+                                <td class="text-danger">{{ '₱' ~ (balance | round(2)) if bucket == '61-90' else '' }}</td>
+                                <td class="text-danger fw-bold">{{ '₱' ~ (balance | round(2)) if bucket == '91+' else '' }}</td>
+                                <td>
+                                    <small>
+                                        Inv #{{ inv.id }} - {{ inv.supplier.name if inv.supplier else 'N/A' }}
+                                        (Due: {{ inv.date.strftime('%Y-%m-%d') }})
+                                    </small>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

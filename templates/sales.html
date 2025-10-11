@@ -42,11 +42,14 @@
         <th>Status</th>
         <th>Date</th>
         <th>Action</th>
+        <th>Doc No.</th>
       </tr>
     </thead>
     <tbody>
       {% for s in sales %}
       <tr>
+        <td>{{ s.document_number }}</td>
+        <h2>{{ sale.document_type }} #{{ sale.document_number }}</h2>
         <td>#{{ s.id }}</td>
         <td>{{ s.customer_name or '—' }}</td>
         <td>₱{{ "%.2f"|format(s.total) }}</td>

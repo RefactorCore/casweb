@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container my-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="mb-1">Inventory Stock Card</h2>
+            <h5 class="text-muted">{{ product.name }} (SKU: {{ product.sku }})</h5>
+        </div>
+        <a href="{{ url_for('core.inventory') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to Inventory
+        </a>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead class="table-primary">
+                        <tr>
+                            <th>Date</th>
+                            <th>Transaction Type</th>
+                            <th>Reference ID</th>
+                            <th class="text-end">Qty In</th>
+                            <th class="text-end">Qty Out</th>
+                            <th class="text-end">Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for t in transactions %}
+                        <tr>
+                            <td>{{ t.date.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td>
+                                {% if t.type == 'Sale' %}
+                                    <span class="badge bg-danger">Sale</span>
+                                {% elif t.type == 'Purchase' %}
+                                    <span class="badge bg-success">Purchase</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">{{ t.type }}</span>
+                                {% endif %}
+                            </td>
+                            <td>#{{ t.ref_id }}</td>
+                            <td class="text-end text-success fw-bold">{{ t.qty_in if t.qty_in > 0 else '' }}</td>
+                            <td class="text-end text-danger fw-bold">{{ t.qty_out if t.qty_out > 0 else '' }}</td>
+                            <td class="text-end fw-bolder">{{ t.balance }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted">No transactions found for this product.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
