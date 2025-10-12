@@ -46,35 +46,34 @@
       </tr>
     </thead>
     <tbody>
-      {% for s in sales %}
-      <tr>
-        <td>{{ s.document_number }}</td>
-        <h2>{{ sale.document_type }} #{{ sale.document_number }}</h2>
-        <td>#{{ s.id }}</td>
-        <td>{{ s.customer_name or '—' }}</td>
-        <td>₱{{ "%.2f"|format(s.total) }}</td>
-        <td>₱{{ "%.2f"|format(s.vat) }}</td>
-        <td>
-          {% if s.status == 'paid' %}
-            <span class="badge bg-success">Paid</span>
-          {% elif s.status == 'refunded' %}
-            <span class="badge bg-warning text-dark">Refunded</span>
-          {% else %}
-            <span class="badge bg-secondary">Pending</span>
-          {% endif %}
-        </td>
-        <td>{{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '—' }}</td>
-        <td>
-          <a href="{{ url_for('core.view_sale', sale_id=s.id) }}" class="btn btn-sm btn-info">🔍 View</a>
-          <a href="{{ url_for('core.print_receipt', sale_id=s.id) }}" class="btn btn-sm btn-outline-primary">🖨 Print</a>
-        </td>
-      </tr>
-      {% else %}
-      <tr>
-        <td colspan="7" class="text-center text-muted">No sales recorded yet.</td>
-      </tr>
-      {% endfor %}
-    </tbody>
+        {% for s in sales %}
+        <tr>
+          <td>#{{ s.id }}</td>
+          <td>{{ s.customer_name or '—' }}</td>
+          <td>₱{{ "%.2f"|format(s.total) }}</td>
+          <td>₱{{ "%.2f"|format(s.vat) }}</td>
+          <td>
+            {% if s.status == 'paid' %}
+              <span class="badge bg-success">Paid</span>
+            {% elif s.status == 'refunded' %}
+              <span class="badge bg-warning text-dark">Refunded</span>
+            {% else %}
+              <span class="badge bg-secondary">Pending</span>
+            {% endif %}
+          </td>
+          <td>{{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '—' }}</td>
+          <td>
+            <a href="{{ url_for('core.view_sale', sale_id=s.id) }}" class="btn btn-sm btn-info">🔍 View</a>
+            <a href="{{ url_for('core.print_receipt', sale_id=s.id) }}" class="btn btn-sm btn-outline-primary">🖨 Print</a>
+          </td>
+          <td>{{ s.document_number }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="text-center text-muted">No sales recorded yet.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
   </table>
 </div>
 
