@@ -46,7 +46,9 @@
   </table>
 
   <div class="mt-4 text-end">
-    <button class="btn btn-outline-primary" onclick="window.print()">🖨️ Print Receipt</button>
+    <a href="{{ url_for('core.print_receipt', sale_id=sale.id) }}" target="_blank" class="btn btn-outline-primary">
+    <i class="bi bi-printer me-2"></i> Print Receipt (Dedicated)
+</a>
   </div>
 </div>
 {% endblock %}
