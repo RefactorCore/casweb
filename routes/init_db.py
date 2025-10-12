@@ -60,6 +60,8 @@ accounts = [
     ('501','COGS','Expense'),
     ('601','VAT Payable','Liability'),
     ('602','VAT Input','Asset'),
+    ('505', 'Inventory Loss', 'Expense'), 
+    ('406', 'Inventory Gain', 'Revenue'),
 ]
 for code,name,typ in accounts:
     a = Account(code=code, name=name, type=typ)
