@@ -3,3 +3,4 @@ Flask-SQLAlchemy
 Flask-Login
 passlib
 pandas
+Flask-Limiter

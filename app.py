@@ -8,10 +8,16 @@ from routes.accounts import accounts_bp
 from models import db, User, CompanyProfile
 from config import Config
 from datetime import datetime
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from extensions import limiter
 
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_object(Config)
+
+    limiter.init_app(app)
+
     app.register_blueprint(accounts_bp)
 
     db.init_app(app)
@@ -24,7 +30,7 @@ def create_app():
 
     @login_manager.user_loader
     def load_user(user_id):
-        return User.query.get(int(user_id))
+        return db.session.get(User, int(user_id))
 
     # --- 'money' filter ---
     @app.template_filter('money')
@@ -62,6 +68,7 @@ def create_app():
     from routes.ar_ap import ar_ap_bp
     from routes.reports import reports_bp
     from routes.users import user_bp
+
 
     app.register_blueprint(core_bp)
     app.register_blueprint(ar_ap_bp)
