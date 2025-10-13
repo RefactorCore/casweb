@@ -12,6 +12,7 @@ from passlib.hash import pbkdf2_sha256
 from flask_login import login_user, logout_user, login_required, current_user
 from routes.decorators import role_required
 from .utils import log_action
+from extensions import limiter
 
 core_bp = Blueprint('core', __name__)
 VAT_RATE = Config.VAT_RATE
@@ -1176,6 +1177,7 @@ def export_balance_sheet():
 
 # --- ADD THIS LOGIN ROUTE ---
 @core_bp.route('/login', methods=['GET', 'POST'])
+@limiter.limit("15 per minute") 
 def login():
     """Handles user login."""
     if current_user.is_authenticated:
@@ -1184,26 +1186,104 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
+
+        # --- ADD THIS: Basic Input Validation ---
+        if not username or not password:
+            flash('Username and password are required.', 'danger')
+            return render_template('login.html'), 400
+        
+        if len(username) > 100 or len(password) > 100:
+            flash('Username or password is too long.', 'danger')
+            return render_template('login.html'), 400
+
         user = User.query.filter_by(username=username).first()
 
         if user and pbkdf2_sha256.verify(password, user.password_hash):
             login_user(user)
-            log_action(f'User logged in successfully.')
+            log_action(f'User logged in successfully.', user=user)
             flash('Logged in successfully!', 'success')
             return redirect(url_for('core.index'))
         else:
+            log_action(f'Failed login attempt for username: {username}.')
             flash('Invalid username or password.', 'danger')
 
     return render_template('login.html')
+
+
+@core_bp.route('/reset-password', methods=['GET', 'POST'])
+@limiter.limit("5 per minute")
+def reset_password_form():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        new_password = request.form.get('password')
+
+        if not username or not new_password:
+            flash('Username and new password are required.', 'danger')
+            return redirect(url_for('core.reset_password_form'))
+
+        user = User.query.filter_by(username=username).first()
+        if user:
+            # Hash the new password and update the user
+            user.password_hash = pbkdf2_sha256.hash(new_password)
+            db.session.commit()
+            
+            # Log this action (without a specific user in session)
+            log_action(f'Password for user {username} was reset via TIN verification.')
+
+            flash('Password has been reset successfully. You can now log in.', 'success')
+            return redirect(url_for('core.login'))
+        else:
+            flash('User not found.', 'danger')
+
+    # For the GET request, fetch all users to populate the dropdown
+    all_users = User.query.order_by(User.username).all()
+    return render_template('reset_password.html', users=all_users)
+
+
+@core_bp.route('/forgot-password', methods=['GET', 'POST'])
+@limiter.limit("10 per hour")
+def forgot_password():
+    if request.method == 'POST':
+        tin = request.form.get('tin')
+        company = CompanyProfile.query.first()
+
+        if company and company.tin == tin:
+            return redirect(url_for('core.reset_password_form'))
+        else:
+            flash('The provided TIN does not match our records.', 'danger')
+
+    return render_template('forgot_password.html')
 
 
 @core_bp.route('/logout')
 @login_required
 def logout():
     """Handles user logout."""
+    # 1. Capture the user's ID and username before logging out
+    user_id_to_log = current_user.id
+    username_to_log = current_user.username
+
+    # 2. Log the user out, which clears the session
     logout_user()
+
+    # 3. Manually create the AuditLog entry with the saved details
+    try:
+        log = AuditLog(
+            user_id=user_id_to_log,
+            action=f'User {username_to_log} logged out successfully.',
+            ip_address=request.remote_addr
+        )
+        db.session.add(log)
+        db.session.commit()
+    except Exception as e:
+        # In case of a database error, we don't want to crash the logout process
+        # You could add proper logging here if needed
+        print(f"Error creating audit log for logout: {e}")
+        db.session.rollback()
+
     flash('You have been logged out.', 'info')
-    return redirect(url_for('core.login')) # This line will now work
+    return redirect(url_for('core.login'))
+
 
 @core_bp.route('/settings', methods=['GET', 'POST'])
 @login_required
