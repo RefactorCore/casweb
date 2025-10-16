@@ -56,6 +56,9 @@ def create_app():
             elif not User.query.filter_by(role='Admin').first():
                  return redirect(url_for('core.setup_license')) # Start from step 1
 
+
+
+
     # --- Context Processor ---
     @app.context_processor
     def inject_company_profile():

@@ -4,3 +4,4 @@ Flask-Login
 passlib
 pandas
 Flask-Limiter
+Flask-WTF
