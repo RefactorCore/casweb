@@ -73,6 +73,7 @@ def setup_admin():
     return render_template('setup/admin.html')
     
 @core_bp.route('/')
+@login_required
 def index():
     # --- Base data ---
     products = Product.query.all()
@@ -187,7 +188,7 @@ def index():
         current_filter_label=current_filter_label # NEW: Pass the label for the title
     )
 
-
+@login_required
 @core_bp.route('/inventory', methods=['GET', 'POST'])
 def inventory():
     from models import Product
@@ -306,7 +307,7 @@ def api_add_multiple_products():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-
+@login_required
 @core_bp.route('/purchase', methods=['GET', 'POST'])
 @role_required('Admin', 'Accountant', 'Cashier')
 def purchase():
@@ -430,6 +431,7 @@ def view_purchase(purchase_id):
 
 
 @core_bp.route('/pos')
+@login_required
 @role_required('Admin', 'Cashier')
 def pos():
     # --- Handle GET (view with pagination and search) ---
