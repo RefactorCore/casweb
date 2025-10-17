@@ -24,13 +24,14 @@
       </div>
     </div>
     <div class="col-md-3">
-      <div class="card shadow-sm text-center border-warning">
-        <div class="card-body">
-          <h6 class="text-muted">Inventory Value</h6>
-          <h4>₱{{ total_inventory_value | round(2) }}</h4>
-        </div>
-      </div>
+  <div class="card shadow-sm text-center border-warning">
+    <div class="card-body">
+      <h6 class="text-muted">Inventory Value</h6>
+      <h4>₱{{ total_inventory_value | round(2) }}</h4>
+      <small class="text-muted">{{ products_in_stock }} total products</small>
     </div>
+  </div>
+</div>
     <div class="col-md-3">
       <div class="card shadow-sm text-center border-success">
         <div class="card-body">
@@ -64,7 +65,7 @@
     <div class="col-md-4">
         <div class="card shadow-sm h-100">
             <div class="card-header bg-warning text-dark fw-bold">
-                <i class="bi bi-star-fill me-2"></i>Top 5 Selling Products
+                <i class="bi bi-star-fill me-2"></i>Top 10 Selling Products
             </div>
             <div class="card-body">
                 <ul class="list-group list-group-flush">
@@ -83,7 +84,7 @@
 </div>
 
 
-  <h4 class="mt-5 mb-3">📦 Product Inventory</h4>
+<!--   <h4 class="mt-5 mb-3">📦 Product Inventory</h4>
   <div class="table-responsive">
     <table class="table table-striped align-middle">
       <thead class="table-primary">
@@ -103,7 +104,7 @@
       {% endfor %}
       </tbody>
     </table>
-  </div>
+  </div> -->
 
   <h5 class="mt-4">⚠️ Low Stock Alerts</h5>
   <ul class="list-group">

@@ -33,8 +33,7 @@
   </div>
 </div>
 
-  <!-- Search and Filters -->
-<div class="card mb-3">
+  <div class="card mb-3">
   <div class="card-body d-flex justify-content-between align-items-center">
     
     <form method="GET" action="{{ url_for('core.inventory') }}" class="d-flex align-items-center">
@@ -54,7 +53,6 @@
 </div>
 
 
-  <!-- Products Table -->
   <div class="card">
     <div class="card-body">
       <div class="table-responsive">
@@ -89,12 +87,12 @@
                 <a href="{{ url_for('reports.stock_card', product_id=p.id) }}" class="btn btn-sm btn-outline-info" title="View Stock Card">
                     <i class="bi bi-card-list"></i>
                 </a>
-                <button class="btn btn-sm btn-outline-secondary" onclick="editProduct('{{ p.sku }}','{{ p.name }}',{{ p.sale_price }},{{ p.cost_price }},{{ p.quantity }})">
+                <button class="btn btn-sm btn-outline-secondary" onclick="editProduct('{{ p.sku }}','{{ p.name }}',{{ p.sale_price }},{{ p.cost_price }})">
                   <i class="bi bi-pencil"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="deleteProduct('{{ p.sku }}')">
+<!--                 <button class="btn btn-sm btn-outline-danger" onclick="deleteProduct('{{ p.sku }}')">
                   <i class="bi bi-trash"></i>
-                </button>
+                </button> -->
               </td>
             </tr>
             {% endfor %}
@@ -142,7 +140,6 @@
   </div>
 </div>
 
-<!-- Add Product Modal -->
 <div class="modal fade" id="addProductModal" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-centered">
     <div class="modal-content">
@@ -155,11 +152,10 @@
           <table class="table table-sm" id="multiProductTable">
             <thead>
               <tr>
-                <th style="width: 15%">SKU</th>
-                <th style="width: 35%">Name</th>
-                <th style="width: 15%">Sale Price</th>
-                <th style="width: 15%">Cost Price</th>
-                <th style="width: 10%">Quantity</th>
+                <th style="width: 20%">SKU</th>
+                <th style="width: 40%">Name</th>
+                <th style="width: 20%">Sale Price</th>
+                <th style="width: 20%">Cost Price</th>
                 <th style="width: 10%"><button type="button" class="btn btn-sm btn-outline-success" onclick="addRow()">+</button></th>
               </tr>
             </thead>
@@ -178,7 +174,6 @@
   </div>
 </div>
 
-<!-- Edit Product Modal -->
 <div class="modal fade" id="editProductModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
@@ -203,11 +198,7 @@
               <input name="cost_price" id="editCost" class="form-control" type="number" step="0.01" required>
             </div>
           </div>
-          <div class="mt-3">
-            <label class="form-label">Quantity</label>
-            <input name="quantity" id="editQty" class="form-control" type="number" required>
           </div>
-        </div>
         <div class="modal-footer">
           <button type="submit" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>Save Changes</button>
         </div>
@@ -228,7 +219,6 @@
           <td><input type="text" class="form-control form-control-sm" name="name" required></td>
           <td><input type="number" step="0.01" class="form-control form-control-sm" name="sale_price" required></td>
           <td><input type="number" step="0.01" class="form-control form-control-sm" name="cost_price" required></td>
-          <td><input type="number" class="form-control form-control-sm" name="quantity" value="0" required></td>
           <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">-</button></td>
       `;
   }
@@ -299,17 +289,17 @@
       }
   });
 
-  // 📝 Edit Product (opens modal)
-  function editProduct(sku, name, sale, cost, qty) {
+  // MODIFIED: 'qty' parameter is removed from the function definition
+  function editProduct(sku, name, sale, cost) {
     document.getElementById('editSKU').value = sku;
     document.getElementById('editName').value = name;
     document.getElementById('editSale').value = sale;
     document.getElementById('editCost').value = cost;
-    document.getElementById('editQty').value = qty;
+    // MODIFIED: The line that set the quantity has been removed
     new bootstrap.Modal(document.getElementById('editProductModal')).show();
   }
 
-  // 🗑️ Delete Product (stub — you can connect backend later)
+  // 🗑️ Delete Product
   function deleteProduct(sku) {
     if (confirm(`Delete product ${sku}?`)) {
       fetch(`/delete_product/${sku}`, { method: 'POST' })
@@ -322,4 +312,3 @@
 </script>
 {% include "_pagination.html" %}
 {% endblock %}
-
