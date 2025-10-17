@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file, Response, session
-from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry
+from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry, StockAdjustment
 import json
 from config import Config
 from datetime import datetime, timedelta
@@ -83,11 +83,14 @@ def index():
     total_sales = db.session.query(func.sum(Sale.total)).scalar() or 0
     total_purchases = db.session.query(func.sum(Purchase.total)).scalar() or 0
     total_inventory_value = sum(p.cost_price * p.quantity for p in products)
+    
+    # --- MODIFIED: Count products with quantity > 0 ---
+    products_in_stock = Product.query.filter(Product.quantity > 0).count()
 
     # --- Income summary (ALL TIME) ---
     net_income = total_sales - total_purchases
     
-    # --- Last 30 Days and Last 12 Hours Summary Data ---
+    # --- The rest of the function remains the same... ---
     today = datetime.utcnow()
     last_30_days_ago = today - timedelta(days=30)
     last_12_hours_ago = today - timedelta(hours=12)
@@ -108,55 +111,32 @@ def index():
     ).scalar() or 0
     net_income_12h = sales_12h - purchases_12h
 
-    # 📈 --- MODIFIED: Chart data (sales trend by 12H, 7D, or 30D) ---
-    # Get 'period' parameter from URL, default to 7 if not present or invalid
     period = request.args.get('period', '7')
-    
     sales_by_period = []
     labels = []
     current_filter_label = ''
-
     if period == '12':
         current_filter_label = 'Last 12 Hours'
-        # Generate 12 hourly intervals ending with the current hour
         intervals = [today - timedelta(hours=i) for i in range(11, -1, -1)]
-        
         for hour_start in intervals:
             hour_end = hour_start + timedelta(hours=1)
-            hour_total = (
-                db.session.query(func.sum(Sale.total))
-                .filter(Sale.created_at >= hour_start)
-                .filter(Sale.created_at < hour_end)
-                .scalar()
-                or 0
-            )
+            hour_total = (db.session.query(func.sum(Sale.total)).filter(Sale.created_at >= hour_start).filter(Sale.created_at < hour_end).scalar() or 0)
             sales_by_period.append(hour_total)
-            labels.append(hour_start.strftime('%I%p')) # e.g., 09AM, 10PM
-
-    else: # Default to 7 days, or use 30 days
+            labels.append(hour_start.strftime('%I%p'))
+    else:
         if period == '30':
             days = 30
             current_filter_label = 'Last 30 Days'
         else:
             days = 7
             current_filter_label = 'Last 7 Days'
-            
         today_date = datetime.utcnow().date()
         last_n_days = [today_date - timedelta(days=i) for i in range(days - 1, -1, -1)]
-
         for day in last_n_days:
-            day_total = (
-                db.session.query(func.sum(Sale.total))
-                .filter(func.date(Sale.created_at) == day)
-                .scalar()
-                or 0
-            )
+            day_total = (db.session.query(func.sum(Sale.total)).filter(func.date(Sale.created_at) == day).scalar() or 0)
             sales_by_period.append(day_total)
             labels.append(day.strftime('%b %d'))
 
-    # -------------------
-
-    # --- Top Selling Products (by Quantity Sold) ---
     top_sellers = (
         db.session.query(
             Product.name,
@@ -165,7 +145,7 @@ def index():
         .join(SaleItem, Product.id == SaleItem.product_id)
         .group_by(Product.name)
         .order_by(func.sum(SaleItem.qty).desc())
-        .limit(5)
+        .limit(10)
         .all()
     )
 
@@ -176,16 +156,18 @@ def index():
         total_sales=total_sales,
         total_purchases=total_purchases,
         total_inventory_value=total_inventory_value,
+        # --- MODIFIED: Pass the new count to the template ---
+        products_in_stock=products_in_stock,
         net_income=net_income,
         labels=labels,
-        sales_by_day=sales_by_period, # Pass the dynamic data here
+        sales_by_day=sales_by_period,
         top_sellers=top_sellers,
         sales_30d=sales_30d,
         net_income_30d=net_income_30d,
         sales_24h=sales_12h, 
         net_income_24h=net_income_12h,
-        current_period_filter=period, # NEW: Pass the current filter value
-        current_filter_label=current_filter_label # NEW: Pass the label for the title
+        current_period_filter=period,
+        current_filter_label=current_filter_label
     )
 
 @login_required
@@ -248,7 +230,7 @@ def update_product():
     product.name = request.form.get('name')
     product.sale_price = float(request.form.get('sale_price') or 0)
     product.cost_price = float(request.form.get('cost_price') or 0)
-    product.quantity = int(request.form.get('quantity') or 0)
+    # product.quantity = int(request.form.get('quantity') or 0)
 
     log_action(f'Updated product SKU: {product.sku}, Name: {product.name}.')
     db.session.commit()
