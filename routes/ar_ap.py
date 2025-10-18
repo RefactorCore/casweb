@@ -196,13 +196,8 @@ def record_payment():
 @login_required
 @role_required('Admin', 'Accountant')
 def credit_memos():
-    """
-    Create a Credit Memo for a sales return/allowance.
-    Journal Entry:
-      Debit Sales Returns
-      Debit VAT Payable
-      Credit Accounts Receivable
-    """
+    # ... (form parsing and validation remains the same) ...
+
     if request.method == 'POST':
         customer_id = int(request.form.get('customer_id'))
         ar_invoice_id = int(request.form.get('ar_invoice_id') or 0) or None
@@ -228,15 +223,26 @@ def credit_memos():
         db.session.add(cm)
         db.session.flush()
 
-        # Adjust original invoice if linked
+        # --- REVISED AR INVOICE ADJUSTMENT BLOCK (The Fix) ---
         if ar_invoice_id:
             inv = ARInvoice.query.get(ar_invoice_id)
             if inv:
-                # This is a simplification; a real system might apply the credit to payments.
-                # For now, we reduce the total.
-                inv.total = max(0, inv.total - total_amount)
+                # 1. Apply the Credit Memo amount to the 'paid' field.
+                # This ensures the outstanding balance is correctly reduced.
+                inv.paid += total_amount 
+                
+                # 2. Update the status based on the new 'paid' amount.
+                remaining_balance = inv.total - inv.paid
+                
+                if remaining_balance <= 0:
+                    inv.status = 'Paid'
+                elif remaining_balance < inv.total:
+                    inv.status = 'Partially Paid'
+                else:
+                    inv.status = 'Open' # Should not happen unless original total was 0
+        # --- END OF FIX ---
 
-        # Journal Entry
+        # Journal Entry (This is correct for Sales Returns)
         je_lines = [
             {'account_code': '405', 'debit': amount_net, 'credit': 0},      # 405: Sales Returns
             {'account_code': '601', 'debit': vat, 'credit': 0},            # 601: VAT Payable (Debit to reduce)
