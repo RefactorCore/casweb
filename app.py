@@ -5,12 +5,13 @@ from flask_login import LoginManager, current_user
 from routes.accounts import accounts_bp
 
 
-from models import db, User, CompanyProfile
+from models import db, User, CompanyProfile, Account
 from config import Config
 from datetime import datetime
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from extensions import limiter
+from passlib.hash import pbkdf2_sha256
 
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
@@ -80,9 +81,49 @@ def create_app():
 
     return app
 
+def seed_essential_data(app):
+    """Seeds essential data (Admin user and COA) if the database is empty."""
+    
+    # Define the Chart of Accounts list here
+    accounts_to_seed = [
+        ('101','Cash','Asset'),
+        ('110', 'Accounts Receivable', 'Asset'),
+        ('120','Inventory','Asset'),
+        ('121', 'Creditable Withholding Tax', 'Asset'),
+        ('201','Accounts Payable','Liability'),
+        ('301','Capital','Equity'),
+        ('401','Sales Revenue','Revenue'),
+        ('402','Other Revenue','Revenue'),
+        ('405', 'Sales Returns', 'Revenue'),
+        ('501','COGS','Expense'),
+        ('601','VAT Payable','Liability'),
+        ('602','VAT Input','Asset'),
+        ('505', 'Inventory Loss', 'Expense'), 
+        ('406', 'Inventory Gain', 'Revenue'),
+    ]
+
+    with app.app_context():
+        # Check 1: Check for existing accounts
+        if Account.query.count() == 0:
+            print("🌱 Seeding Chart of Accounts...")
+            try:
+                for code, name, typ in accounts_to_seed:
+                    a = Account(code=code, name=name, type=typ)
+                    db.session.add(a)
+                db.session.commit()
+                print("✅ Chart of Accounts seeded.")
+            except Exception as e:
+                db.session.rollback()
+                print(f"❌ Error seeding COA: {e}")
+        
 
 if __name__ == '__main__':
     app = create_app()
     with app.app_context():
+        # 1. Create all tables
         db.create_all()
+        
+        # 2. Seed the essential data (Pass the app object to the function)
+        seed_essential_data(app)
+        
     app.run(debug=True)
