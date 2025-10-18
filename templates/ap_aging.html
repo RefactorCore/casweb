@@ -31,10 +31,12 @@
                             <tr>
                                 {% set balance = inv.total - inv.paid %}
                                 <td {% if bucket == 'current' %}class="text-success"{% endif %}>{{ balance | money if bucket == 'current' else '' }}</td>
-                                Global<td>{{ balance | money if bucket == '1-30' else '' }}</td>
-                                <td>{{ balance | money if bucket == '31-60' else '' }}</td>
-                                <td class="text-danger">{{ balance | money if bucket == '61-90' else '' }}</td>
-                                <td class="text-danger fw-bold">{{ balance | money if bucket == '91+' else '' }}</td>
+                                
+                                <td {% if bucket == '1-30' %}class="text-warning"{% endif %}>{{ balance | money if bucket == '1-30' else '' }}</td>
+                                
+                                <td {% if bucket == '31-60' %}class="text-warning"{% endif %}>{{ balance | money if bucket == '31-60' else '' }}</td>
+                                <td {% if bucket == '61-90' %}class="text-danger"{% endif %}>{{ balance | money if bucket == '61-90' else '' }}</td>
+                                <td {% if bucket == '91+' %}class="text-danger fw-bold"{% endif %}>{{ balance | money if bucket == '91+' else '' }}</td>
                                 <td>
                                     <small>
                                         Inv #{{ inv.id }} - {{ inv.supplier.name if inv.supplier else 'N/A' }}
