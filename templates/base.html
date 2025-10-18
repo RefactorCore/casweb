@@ -96,6 +96,7 @@
       <a href="{{ url_for('core.sales') }}" class="{% if '/sales' in request.path %}active{% endif %}">
         <i class="bi bi-receipt-cutoff me-2"></i> Sales
       </a>
+      
       {% if current_user.role in ['Admin', 'Accountant'] %}
       
       <hr class="border-light my-2">
@@ -108,53 +109,70 @@
         <i class="bi bi-list-columns-reverse me-2"></i> Chart of Accounts
       </a>
 
-      <a class="text-white" data-bs-toggle="collapse" href="#financialReportsSubmenu" role="button" aria-expanded="false" aria-controls="financialReportsSubmenu">
+      {% set financial_reports_active = request.endpoint in [
+          'reports.trial_balance', 
+          'reports.income_statement', 
+          'reports.balance_sheet'
+      ] %}
+      <a class="text-white {% if financial_reports_active %}active{% endif %}" data-bs-toggle="collapse" href="#financialReportsSubmenu" role="button" aria-expanded="{% if financial_reports_active %}true{% else %}false{% endif %}" aria-controls="financialReportsSubmenu">
         <i class="bi bi-file-earmark-bar-graph me-2"></i> Financial Reports
       </a>
-      <div class="collapse" id="financialReportsSubmenu">
-          <a href="{{ url_for('reports.trial_balance') }}" class="ms-3 ps-4">
+      <div class="collapse {% if financial_reports_active %}show{% endif %}" id="financialReportsSubmenu">
+          <a href="{{ url_for('reports.trial_balance') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.trial_balance' %}active{% endif %}">
             - Trial Balance
           </a>
-          <a href="{{ url_for('reports.income_statement') }}" class="ms-3 ps-4">
+          <a href="{{ url_for('reports.income_statement') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.income_statement' %}active{% endif %}">
             - Income Statement
           </a>
-          <a href="{{ url_for('reports.balance_sheet') }}" class="ms-3 ps-4">
+          <a href="{{ url_for('reports.balance_sheet') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.balance_sheet' %}active{% endif %}">
             - Balance Sheet
           </a>
       </div>
 
-      <a class="text-white" data-bs-toggle="collapse" href="#arApSubmenu" role="button" aria-expanded="false" aria-controls="arApSubmenu">
+      {% set ar_ap_active = request.endpoint in [
+          'reports.ar_aging', 
+          'reports.ap_aging', 
+          'ar_ap.credit_memos'
+      ] %}
+      <a class="text-white {% if ar_ap_active %}active{% endif %}" data-bs-toggle="collapse" href="#arApSubmenu" role="button" aria-expanded="{% if ar_ap_active %}true{% else %}false{% endif %}" aria-controls="arApSubmenu">
         <i class="bi bi-people me-2"></i> Receivables & Payables
       </a>
-      <div class="collapse" id="arApSubmenu">
-          <a href="{{ url_for('reports.ar_aging') }}" class="ms-3 ps-4">
+      <div class="collapse {% if ar_ap_active %}show{% endif %}" id="arApSubmenu">
+          <a href="{{ url_for('reports.ar_aging') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.ar_aging' %}active{% endif %}">
             - AR Aging
           </a>
-          <a href="{{ url_for('reports.ap_aging') }}" class="ms-3 ps-4">
+          <a href="{{ url_for('reports.ap_aging') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.ap_aging' %}active{% endif %}">
             - AP Aging
           </a>
-          <a href="{{ url_for('ar_ap.credit_memos') }}" class="ms-3 ps-4">
+          <a href="{{ url_for('ar_ap.credit_memos') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.credit_memos' %}active{% endif %}">
             - Credit Memos
           </a>
       </div>
       
-      <a class="text-white" data-bs-toggle="collapse" href="#taxReportsSubmenu" role="button" aria-expanded="false" aria-controls="taxReportsSubmenu">
+      {% set tax_reports_active = request.endpoint in [
+          'reports.vat_report', 
+          'reports.vat_return', 
+          'reports.summary_list_sales', 
+          'reports.summary_list_purchases', 
+          'reports.form_2307_report'
+      ] %}
+      <a class="text-white {% if tax_reports_active %}active{% endif %}" data-bs-toggle="collapse" href="#taxReportsSubmenu" role="button" aria-expanded="{% if tax_reports_active %}true{% else %}false{% endif %}" aria-controls="taxReportsSubmenu">
         <i class="bi bi-percent me-2"></i> Tax Reports
       </a>
-      <div class="collapse" id="taxReportsSubmenu">
-          <a href="{{ url_for('reports.vat_report') }}" class="ms-3 ps-4">
+      <div class="collapse {% if tax_reports_active %}show{% endif %}" id="taxReportsSubmenu">
+          <a href="{{ url_for('reports.vat_report') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.vat_report' %}active{% endif %}">
             - VAT Report
           </a>
-          <a href="{{ url_for('reports.vat_return') }}" class="ms-3 ps-4">
+          <a href="{{ url_for('reports.vat_return') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.vat_return' %}active{% endif %}">
             - VAT Return
           </a>
-          <a href="{{ url_for('reports.summary_list_sales') }}" class="ms-3 ps-4">
+          <a href="{{ url_for('reports.summary_list_sales') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_sales' %}active{% endif %}">
             - Summary List of Sales
           </a>
-          <a href="{{ url_for('reports.summary_list_purchases') }}" class="ms-3 ps-4">
+          <a href="{{ url_for('reports.summary_list_purchases') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_purchases' %}active{% endif %}">
             - Summary List of Purchases
           </a>
-           <a href="{{ url_for('reports.form_2307_report') }}" class="ms-3 ps-4">
+           <a href="{{ url_for('reports.form_2307_report') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.form_2307_report' %}active{% endif %}">
             - Form 2307 Data
           </a>
       </div>

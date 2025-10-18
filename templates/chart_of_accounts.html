@@ -118,7 +118,10 @@ function openEditModal(id, code, name, type) {
     form.action = `/accounts/update/${id}`;
     document.getElementById('editCode').value = code;
     document.getElementById('editName').value = name;
-    document.getElementById('editType').value = type;
+    
+    // 👇 UPDATED LINE: Set the correct option in the select field
+    document.getElementById('editType').value = type; 
+    
     new bootstrap.Modal(document.getElementById('editAccountModal')).show();
 }
 </script>
