@@ -1,11 +1,50 @@
 {% extends 'base.html' %}
 {% block content %}
-<h2>Trial Balance</h2>
-<table><thead><tr><th>Account</th><th>Debit</th><th>Credit</th></tr></thead><tbody>
-{% for r in tb %}
-<tr><td>{{ r.account }}</td><td>{{ '%.2f'|format(r.debit) }}</td><td>{{ '%.2f'|format(r.credit) }}</td></tr>
-{% endfor %}
-</tbody>
-<tfoot><tr><th>Totals</th><th>{{ '%.2f'|format(total_debit) }}</th><th>{{ '%.2f'|format(total_credit) }}</th></tr></tfoot>
-</table>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="fw-bold text-primary mb-0">📈 Trial Balance</h2>
+        <a href="{{ url_for('reports.export_trial_balance') }}" class="btn btn-success">
+            ⬇ Export CSV
+        </a>
+    </div>
+    
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-striped table-hover">
+            <thead class="table-primary">
+              <tr>
+                <th scope="col">Code</th>
+                <th scope="col">Account Name</th>
+                <th scope="col" class="text-end">Debit</th>
+                <th scope="col" class="text-end">Credit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in tb %}
+              <tr>
+                <td>{{ r.code }}</td>
+                
+                <td>
+                  <a href="{{ url_for('reports.ledger', code=r.code) }}">
+                    {{ r.name }}
+                  </a>
+                </td>
+                
+                <td class="text-end">{{ r.debit | money }}</td>
+                <td class="text-end">{{ r.credit | money }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot class="fw-bold">
+              <tr>
+                <td colspan="2">Totals</td>
+                <td class="text-end">{{ total_debit | money }}</td>
+                <td class="text-end">{{ total_credit | money }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
 {% endblock %}

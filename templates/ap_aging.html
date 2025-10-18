@@ -1,9 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="container my-4">
-        <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
-        &larr; Back to Reports List
-    </a>
     <h2 class="mb-4">Aging of Accounts Payable</h2>
 
     <div class="card shadow-sm">
@@ -20,12 +17,12 @@
                             <th>Total Due</th>
                         </tr>
                          <tr>
-                            <th>₱{{ totals['current'] | round(2) }}</th>
-                            <th>₱{{ totals['1-30'] | round(2) }}</th>
-                            <th>₱{{ totals['31-60'] | round(2) }}</th>
-                            <th>₱{{ totals['61-90'] | round(2) }}</th>
-                            <th>₱{{ totals['91+'] | round(2) }}</th>
-                            <th>₱{{ totals['total'] | round(2) }}</th>
+                            <th>{{ totals['current'] | money }}</th>
+                            <th>{{ totals['1-30'] | money }}</th>
+                            <th>{{ totals['31-60'] | money }}</th>
+                            <th>{{ totals['61-90'] | money }}</th>
+                            <th>{{ totals['91+'] | money }}</th>
+                            <th>{{ totals['total'] | money }}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -33,11 +30,11 @@
                             {% for inv in aging_data[bucket] %}
                             <tr>
                                 {% set balance = inv.total - inv.paid %}
-                                <td {% if bucket == 'current' %}class="text-success"{% endif %}>{{ '₱' ~ (balance | round(2)) if bucket == 'current' else '' }}</td>
-                                <td>{{ '₱' ~ (balance | round(2)) if bucket == '1-30' else '' }}</td>
-                                <td>{{ '₱' ~ (balance | round(2)) if bucket == '31-60' else '' }}</td>
-                                <td class="text-danger">{{ '₱' ~ (balance | round(2)) if bucket == '61-90' else '' }}</td>
-                                <td class="text-danger fw-bold">{{ '₱' ~ (balance | round(2)) if bucket == '91+' else '' }}</td>
+                                <td {% if bucket == 'current' %}class="text-success"{% endif %}>{{ balance | money if bucket == 'current' else '' }}</td>
+                                Global<td>{{ balance | money if bucket == '1-30' else '' }}</td>
+                                <td>{{ balance | money if bucket == '31-60' else '' }}</td>
+                                <td class="text-danger">{{ balance | money if bucket == '61-90' else '' }}</td>
+                                <td class="text-danger fw-bold">{{ balance | money if bucket == '91+' else '' }}</td>
                                 <td>
                                     <small>
                                         Inv #{{ inv.id }} - {{ inv.supplier.name if inv.supplier else 'N/A' }}

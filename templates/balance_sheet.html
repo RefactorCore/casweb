@@ -2,13 +2,9 @@
 {% block content %}
 
 <div class="container mt-4">
-    <div class="container mt-4">
-    <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
-        &larr; Back to Reports List
-    </a>
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2 class="fw-bold text-primary mb-0">📊 Balance Sheet</h2>
-        <a href="{{ url_for('core.export_balance_sheet') }}" class="btn btn-success">
+        <a href="{{ url_for('reports.export_balance_sheet') }}" class="btn btn-success">
             ⬇ Export CSV
         </a>
     </div>
@@ -20,10 +16,10 @@
                 <div class="card-body">
                     <table class="table table-sm table-borderless">
                         <tbody>
-                            {% for asset in assets %}
+                            {% for name, balance in assets %}
                             <tr>
-                                <td>{{ asset.account }}</td>
-                                <td class="text-end">{{ asset.balance | money }}</td>
+                                <td>{{ name }}</td>
+                                <td class="text-end">{{ balance | money }}</td>
                             </tr>
                             {% endfor %}
                             <tr class="fw-bold table-primary">
@@ -44,10 +40,10 @@
                     <h6 class="text-info">LIABILITIES</h6>
                     <table class="table table-sm table-borderless">
                         <tbody>
-                            {% for liability in liabilities %}
+                            {% for name, balance in liabilities %}
                             <tr>
-                                <td>{{ liability.account }}</td>
-                                <td class="text-end">{{ liability.balance | money }}</td>
+                                <td>{{ name }}</td>
+                                <td class="text-end">{{ balance | money }}</td>
                             </tr>
                             {% endfor %}
                             <tr class="fw-bold">
@@ -60,10 +56,10 @@
                     <h6 class="text-success mt-4">EQUITY</h6>
                     <table class="table table-sm table-borderless">
                         <tbody>
-                            {% for eq in equity %}
+                            {% for name, balance in equity %}
                             <tr>
-                                <td>{{ eq.account }}</td>
-                                <td class="text-end">{{ eq.balance | money }}</td>
+                                <td>{{ name }}</td>
+                                <td class="text-end">{{ balance | money }}</td>
                             </tr>
                             {% endfor %}
                             <tr class="fw-bold">
@@ -77,7 +73,7 @@
                     <table class="table table-sm table-borderless">
                         <tr class="fw-bold table-secondary">
                             <td>TOTAL LIABILITIES & EQUITY</td>
-                            <td class="text-end">{{ total_liabilities_and_equity | money }}</td>
+                            <td class="text-end">{{ (total_liabilities + total_equity) | money }}</td>
                         </tr>
                     </table>
                 </div>

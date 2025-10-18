@@ -3,19 +3,14 @@
 
 <div class="container mt-4">
 
-  <!-- Header -->
-  <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
-        &larr; Back to Reports List
-    </a>
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="fw-bold text-primary">📄 VAT Summary Report</h2>
-    <a href="{{ url_for('core.export_vat_report', **request.args) }}" class="btn btn-success">
+    <a href="{{ url_for('reports.export_vat_report', **request.args) }}" class="btn btn-success">
       ⬇ Export CSV
     </a>
   </div>
 
-  <!-- Filter (optional) -->
-  <form method="get" action="{{ url_for('core.vat_report') }}" class="row g-2 mb-4">
+  <form method="get" action="{{ url_for('reports.vat_report') }}" class="row g-2 mb-4">
     <div class="col-md-3">
       <label class="form-label fw-semibold">Start Date</label>
       <input type="date" name="start_date" value="{{ start_date or '' }}" class="form-control">
@@ -29,32 +24,31 @@
     </div>
   </form>
 
-  <!-- VAT Table -->
   <div class="card shadow-sm">
     <div class="card-body">
       <table class="table table-bordered table-hover align-middle">
         <thead class="table-light">
           <tr>
             <th class="text-center">Type</th>
-            <th class="text-end">Amount (₱)</th>
+            <th class="text-end">Amount</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>Input VAT (from Purchases)</td>
-            <td class="text-end text-danger">₱{{ '%.2f' | format(purchase_vat) }}</td>
+            <td class="text-end text-danger">{{ purchase_vat | money }}</td>
           </tr>
           <tr>
             <td>Output VAT (from Sales)</td>
-            <td class="text-end text-success">₱{{ '%.2f' | format(sale_vat) }}</td>
+            <td class="text-end text-success">{{ sale_vat | money }}</td>
           </tr>
           <tr class="fw-bold table-secondary">
             <td>VAT Payable / (Refund)</td>
             <td class="text-end">
               {% if vat_payable >= 0 %}
-                <span class="text-danger">₱{{ '%.2f' | format(vat_payable) }} (Payable)</span>
+                <span class="text-danger">{{ vat_payable | money }} (Payable)</span>
               {% else %}
-                <span class="text-success">₱{{ '%.2f' | format(-vat_payable) }} (Refund)</span>
+                <span class="text-success">{{ (vat_payable * -1) | money }} (Refund)</span>
               {% endif %}
             </td>
           </tr>
