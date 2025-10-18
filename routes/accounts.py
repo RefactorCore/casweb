@@ -42,9 +42,24 @@ def add_account():
 def update_account(account_id):
     """Update an existing account."""
     account = Account.query.get_or_404(account_id)
-    account.code = request.form.get('code')
-    account.name = request.form.get('name')
-    account.type = request.form.get('type')
+    new_code = request.form.get('code')
+    new_name = request.form.get('name')
+    new_type = request.form.get('type')
+
+    # --- ADD THIS CHECK ---
+    # Check if new code conflicts with *another* account
+    existing_code = Account.query.filter(Account.code == new_code, Account.id != account_id).first()
+    # Check if new name conflicts with *another* account
+    existing_name = Account.query.filter(Account.name == new_name, Account.id != account_id).first()
+
+    if existing_code or existing_name:
+        flash('That account code or name is already in use by another account.', 'danger')
+        return redirect(url_for('accounts.chart_of_accounts'))
+    # --- END OF CHECK ---
+
+    account.code = new_code
+    account.name = new_name
+    account.type = new_type
     db.session.commit()
     flash('Account updated successfully.', 'success')
     return redirect(url_for('accounts.chart_of_accounts'))

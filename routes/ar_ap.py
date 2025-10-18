@@ -74,9 +74,9 @@ def ar_invoices():
 
         # Journal entry
         je_lines = [
-            {'account': 'Accounts Receivable', 'debit': round(inv.total, 2), 'credit': 0},
-            {'account': 'Sales Revenue', 'debit': 0, 'credit': round(inv.total - inv.vat, 2)},
-            {'account': 'VAT Payable', 'debit': 0, 'credit': round(inv.vat, 2)},
+            {'account_code': '110', 'debit': round(inv.total, 2), 'credit': 0},         # 110: Accounts Receivable
+            {'account_code': '401', 'debit': 0, 'credit': round(inv.total - inv.vat, 2)}, # 401: Sales Revenue
+            {'account_code': '601', 'debit': 0, 'credit': round(inv.vat, 2)},          # 601: VAT Payable
         ]
         je = JournalEntry(description=f'AR Invoice #{inv.id}', entries_json=json.dumps(je_lines))
         db.session.add(je)
@@ -114,9 +114,9 @@ def ap_invoices():
         db.session.flush()
 
         je_lines = [
-            {'account': 'Inventory', 'debit': round(inv.total - inv.vat, 2), 'credit': 0},
-            {'account': 'VAT Input', 'debit': round(inv.vat, 2), 'credit': 0},
-            {'account': 'Accounts Payable', 'debit': 0, 'credit': round(inv.total, 2)},
+            {'account_code': '120', 'debit': round(inv.total - inv.vat, 2), 'credit': 0}, # 120: Inventory
+            {'account_code': '602', 'debit': round(inv.vat, 2), 'credit': 0},          # 602: VAT Input
+            {'account_code': '201', 'debit': 0, 'credit': round(inv.total, 2)},        # 201: Accounts Payable
         ]
         je = JournalEntry(description=f'AP Invoice #{inv.id}', entries_json=json.dumps(je_lines))
         db.session.add(je)
@@ -162,9 +162,9 @@ def record_payment():
             
         # JE: Debit Cash, Debit CWT, Credit Accounts Receivable
         je_lines = [
-            {'account': 'Cash', 'debit': round(amount, 2), 'credit': 0},
-            {'account': 'Creditable Withholding Tax', 'debit': round(wht_amount, 2), 'credit': 0},
-            {'account': 'Accounts Receivable', 'debit': 0, 'credit': round(amount + wht_amount, 2)}
+            {'account_code': '101', 'debit': round(amount, 2), 'credit': 0},         # 101: Cash
+            {'account_code': '121', 'debit': round(wht_amount, 2), 'credit': 0},      # 121: Creditable Withholding Tax
+            {'account_code': '110', 'debit': 0, 'credit': round(amount + wht_amount, 2)} # 110: Accounts Receivable
         ]
         
     elif ref_type == 'AP':
@@ -174,8 +174,8 @@ def record_payment():
             inv.status = 'Paid' if inv.paid >= inv.total else 'Partially Paid'
         # JE: Debit Accounts Payable, Credit Cash
         je_lines = [
-            {'account': 'Accounts Payable', 'debit': round(amount, 2), 'credit': 0},
-            {'account': 'Cash', 'debit': 0, 'credit': round(amount, 2)}
+            {'account_code': '201', 'debit': round(amount, 2), 'credit': 0}, # 201: Accounts Payable
+            {'account_code': '101', 'debit': 0, 'credit': round(amount, 2)}  # 101: Cash
         ]
     else:
         flash('Unknown ref type'); db.session.rollback(); return redirect(url_for('ar_ap.customers'))
@@ -238,9 +238,9 @@ def credit_memos():
 
         # Journal Entry
         je_lines = [
-            {'account': 'Sales Returns', 'debit': amount_net, 'credit': 0},
-            {'account': 'VAT Payable', 'debit': vat, 'credit': 0}, # Debit to reduce liability
-            {'account': 'Accounts Receivable', 'debit': 0, 'credit': total_amount}
+            {'account_code': '405', 'debit': amount_net, 'credit': 0},      # 405: Sales Returns
+            {'account_code': '601', 'debit': vat, 'credit': 0},            # 601: VAT Payable (Debit to reduce)
+            {'account_code': '110', 'debit': 0, 'credit': total_amount}     # 110: Accounts Receivable
         ]
         je = JournalEntry(description=f'Credit Memo #{cm.id} for {reason}', entries_json=json.dumps(je_lines))
         db.session.add(je)

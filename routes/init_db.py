@@ -50,6 +50,7 @@ db.session.add(profile)
 # REMOVE: from models import Account, JournalEntry (They are already imported at the top)
 accounts = [
     ('101','Cash','Asset'),
+    ('110', 'Accounts Receivable', 'Asset'),
     ('120','Inventory','Asset'),
     ('121', 'Creditable Withholding Tax', 'Asset'),
     ('201','Accounts Payable','Liability'),
@@ -72,21 +73,22 @@ print('Company profile and new accounts created.')
 
 # Optionally create a sample journal from existing sales/purchases to populate accounts
 # Sale, Purchase, and json are now defined from the imports at the top
+print('Creating sample journal entries from sales/purchases...')
 for s in Sale.query.all():
     je_lines = [
-        dict(account='Cash', debit=s.total, credit=0),
-        dict(account='Sales Revenue', debit=0, credit=round(s.total - s.vat,2)),
-        dict(account='VAT Payable', debit=0, credit=round(s.vat,2)),
+        dict(account_code='101', debit=s.total, credit=0), # 101: Cash
+        dict(account_code='401', debit=0, credit=round(s.total - s.vat,2)), # 401: Sales Revenue
+        dict(account_code='601', debit=0, credit=round(s.vat,2)), # 601: VAT Payable
     ]
     je = JournalEntry(description=f'Auto-import Sale #{s.id}', entries_json=json.dumps(je_lines))
     db.session.add(je)
 for p in Purchase.query.all():
     je_lines = [
-        dict(account='Inventory', debit=round(p.total - p.vat,2), credit=0),
-        dict(account='VAT Input', debit=round(p.vat,2), credit=0),
-        dict(account='Accounts Payable', debit=0, credit=round(p.total,2)),
+        dict(account_code='120', debit=round(p.total - p.vat,2), credit=0), # 120: Inventory
+        dict(account_code='602', debit=round(p.vat,2), credit=0), # 602: VAT Input
+        dict(account_code='201', debit=0, credit=round(p.total,2)), # 201: Accounts Payable
     ]
     je = JournalEntry(description=f'Auto-import Purchase #{p.id}', entries_json=json.dumps(je_lines))
     db.session.add(je)
 db.session.commit()
-print('Chart of Accounts and sample journal entries created.')
+print('Sample journal entries created.')

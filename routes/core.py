@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file, Response, session
-from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry, StockAdjustment
+from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry, StockAdjustment, Account
 import json
 from config import Config
 from datetime import datetime, timedelta
@@ -364,9 +364,9 @@ def purchase():
 
             # --- Record journal entry ---
             journal_lines = [
-                {"account": "Inventory", "debit": total - vat_total, "credit": 0},
-                {"account": "VAT Input", "debit": vat_total, "credit": 0},
-                {"account": "Accounts Payable", "debit": 0, "credit": total}
+                {"account_code": "120", "debit": total - vat_total, "credit": 0}, # 120: Inventory
+                {"account_code": "602", "debit": vat_total, "credit": 0},         # 602: VAT Input
+                {"account_code": "201", "debit": 0, "credit": total}              # 201: Accounts Payable
             ]
             journal = JournalEntry(
                 description=f"Purchase #{purchase.id} - {supplier}",
@@ -504,11 +504,11 @@ def api_sale():
         sale.total, sale.vat = total, vat_total
 
         je_lines = [
-            {'account': 'Cash', 'debit': total, 'credit': 0},
-            {'account': 'Sales Revenue', 'debit': 0, 'credit': total - vat_total},
-            {'account': 'VAT Payable', 'debit': 0, 'credit': vat_total},
-            {'account': 'COGS', 'debit': cogs_total, 'credit': 0},
-            {'account': 'Inventory', 'debit': 0, 'credit': cogs_total},
+            {'account_code': '101', 'debit': total, 'credit': 0},                   # 101: Cash
+            {'account_code': '401', 'debit': 0, 'credit': total - vat_total},      # 401: Sales Revenue
+            {'account_code': '601', 'debit': 0, 'credit': vat_total},              # 601: VAT Payable
+            {'account_code': '501', 'debit': cogs_total, 'credit': 0},              # 501: COGS
+            {'account_code': '120', 'debit': 0, 'credit': cogs_total},              # 120: Inventory
         ]
         # --- MODIFIED: Update Journal Entry description ---
         db.session.add(JournalEntry(description=f'Sale #{sale.id} ({full_doc_number})', entries_json=json.dumps(je_lines)))
@@ -639,71 +639,117 @@ def view_sale(sale_id):
 
     return render_template('view_sale.html', sale=sale, items=items)
 
-@core_bp.route('/reports')
+@core_bp.route('/journal-entries')
 @role_required('Admin', 'Accountant')
-def reports():
-    """Display all journal entries with filters and summary."""
-    # --- 1. Get Filters ---
-    search = request.args.get('search', '').strip()
-    start_date = request.args.get('start_date', '')
-    end_date = request.args.get('end_date', '')
+def journal_entries():
+    """Display all journal entries with search and date filters."""
+    search = request.args.get('search', '')
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
 
-    query = JournalEntry.query
+    query = JournalEntry.query.order_by(JournalEntry.created_at.desc())
 
-    # --- 2. Apply Filters ---
-    # 🔎 Filter: Search by description or account name in entries_json
+    # --- THIS IS NEW: Create a map of Account Codes -> Account Names ---
+    # We will pass this to the template to display names instead of codes
+    accounts_map = {a.code: a.name for a in Account.query.all()}
+    
+    # --- UPDATED: Search/Filter Logic ---
+    safe_args = {}
     if search:
-        query = query.filter(JournalEntry.description.ilike(f"%{search}%") | JournalEntry.entries_json.ilike(f"%{search}%"))
+        safe_args['search'] = search
+        # Updated to search for account_code instead of account name
+        query = query.filter(
+            (JournalEntry.description.ilike(f'%{search}%')) |
+            (JournalEntry.entries_json.ilike(f'%\"account_code\": \"{search}\"%')) 
+        )
+        
+    start_date, end_date = None, None
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+            query = query.filter(JournalEntry.created_at >= start_date)
+            safe_args['start_date'] = start_date_str
+        except ValueError:
+            pass # ignore invalid date
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+            # Add 1 day to end_date to make it inclusive
+            end_date = end_date + timedelta(days=1)
+            query = query.filter(JournalEntry.created_at <= end_date)
+            safe_args['end_date'] = end_date_str
+        except ValueError:
+            pass # ignore invalid date
+    # --- END OF UPDATED LOGIC ---
 
-    # 📅 Filter: Date range (Using the robust parse_date helper)
-    if start_date:
-        start_dt = parse_date(start_date)
-        if start_dt:
-            query = query.filter(JournalEntry.created_at >= start_dt)
-            
-    if end_date:
-        end_dt = parse_date(end_date)
-        if end_dt:
-            # Add one day to the end date to include the entire end date
-            end_of_day = end_dt + timedelta(days=1)
-            query = query.filter(JournalEntry.created_at < end_of_day)
-
-
-    # --- 3. Compute Summary (Requires all filtered data) ---
-    # We query all filtered journals to calculate the full summary before pagination.
-    # Note: Using .all() here is only necessary for the summary calculation.
-    filtered_journals = query.order_by(JournalEntry.created_at.desc()).all()
-    
-    total_debit = 0
-    total_credit = 0
-    for j in filtered_journals:
-        for e in j.entries():
-            total_debit += float(e.get("debit", 0) or 0)
-            total_credit += float(e.get("credit", 0) or 0)
-
-    summary = {
-        "count": len(filtered_journals),
-        "total_debit": total_debit,
-        "total_credit": total_credit,
-    }
-    
-    # --- 4. Paginate Results ---
-    # Since query.all() consumes the query, we reset and re-run for pagination
-    # A cleaner approach is to use the existing 'query' object before calling .all()
-    # (Your original query object is intact, so we can use it here)
-    pagination = paginate_query(query.order_by(JournalEntry.created_at.desc()), per_page=10)
-
-    # --- 5. Prepare safe_args for template links ---
-    safe_args = {k: v for k, v in request.args.items() if k != 'page'}
+    pagination = paginate_query(query)
     
     return render_template(
-        "reports.html", 
-        journals=pagination.items, 
-        pagination=pagination, 
-        summary=summary,
-        safe_args=safe_args, # Passed for pagination/export links
-        start_date=start_date, # Passed to persist form value
-        end_date=end_date      # Passed to persist form value
+        'reports.html',
+        journals=pagination.items,
+        pagination=pagination,
+        accounts_map=accounts_map,  # <-- Pass the map to the template
+        safe_args=safe_args,
+        start_date=start_date_str,
+        end_date=end_date_str
+    )
+
+@core_bp.route('/export/journal-entries')
+@login_required
+@role_required('Admin', 'Accountant')
+def export_journal_entries():
+    """Export journal entries to CSV, respecting filters."""
+    search = request.args.get('search', '')
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+
+    query = JournalEntry.query.order_by(JournalEntry.created_at.asc())
+    
+    # --- Create the account map just like in the main function ---
+    accounts_map = {a.code: a.name for a in Account.query.all()}
+
+    # --- Apply filters just like in the main function ---
+    if search:
+        query = query.filter(
+            (JournalEntry.description.ilike(f'%{search}%')) |
+            (JournalEntry.entries_json.ilike(f'%\"account_code\": \"{search}\"%'))
+        )
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+            query = query.filter(JournalEntry.created_at >= start_date)
+        except ValueError: pass
+    if end_date_str:
+        try:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
+            query = query.filter(JournalEntry.created_at <= end_date)
+        except ValueError: pass
+
+    journals = query.all()
+    
+    # --- Create CSV ---
+    si = io.StringIO()
+    writer = csv.writer(si)
+    
+    # Write Header
+    writer.writerow(['Journal_ID', 'Date', 'Description', 'Account_Code', 'Account_Name', 'Debit', 'Credit'])
+    
+    # Write Rows
+    for je in journals:
+        je_date = je.created_at.strftime('%Y-%m-%d %H:%M')
+        for line in je.entries():
+            code = line.get('account_code')
+            # Use the map to find the name
+            name = accounts_map.get(code, code) # Fallback to code if not found
+            debit = line.get('debit', 0)
+            credit = line.get('credit', 0)
+            writer.writerow([je.id, je_date, je.description, code, name, debit, credit])
+
+    output = si.getvalue()
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment;filename=journal_entries.csv"}
     )
 
 @core_bp.route('/export_journals')
@@ -818,80 +864,80 @@ def export_vat_report():
 
 
 
-@core_bp.route('/income_statement')
-def income_statement():
-    journals = JournalEntry.query.all()
+# @core_bp.route('/income_statement')
+# def income_statement():
+#     journals = JournalEntry.query.all()
 
-    total_revenue = total_cogs = total_expense = 0
+#     total_revenue = total_cogs = total_expense = 0
 
-    for j in journals:
-        for line in j.entries():
-            acc = line.get('account', '').lower()
-            debit = float(line.get('debit', 0))
-            credit = float(line.get('credit', 0))
+#     for j in journals:
+#         for line in j.entries():
+#             acc = line.get('account', '').lower()
+#             debit = float(line.get('debit', 0))
+#             credit = float(line.get('credit', 0))
 
-            if 'sales revenue' in acc:
-                total_revenue += credit
-            elif 'cogs' in acc:
-                total_cogs += debit
-            elif acc in ['rent expense', 'utilities expense', 'salaries expense', 'misc expense']:
-                total_expense += debit
+#             if 'sales revenue' in acc:
+#                 total_revenue += credit
+#             elif 'cogs' in acc:
+#                 total_cogs += debit
+#             elif acc in ['rent expense', 'utilities expense', 'salaries expense', 'misc expense']:
+#                 total_expense += debit
 
-    gross_profit = total_revenue - total_cogs
-    net_income = gross_profit - total_expense
+#     gross_profit = total_revenue - total_cogs
+#     net_income = gross_profit - total_expense
 
-    return render_template(
-        'income_statement.html',
-        total_revenue=total_revenue,
-        total_cogs=total_cogs,
-        gross_profit=gross_profit,
-        total_expense=total_expense,
-        net_income=net_income
-    )
+#     return render_template(
+#         'income_statement.html',
+#         total_revenue=total_revenue,
+#         total_cogs=total_cogs,
+#         gross_profit=gross_profit,
+#         total_expense=total_expense,
+#         net_income=net_income
+#     )
 
-@core_bp.route('/export_income_statement', methods=['GET'])
-def export_income_statement():
-    # Reuse the calculation logic from the income_statement view
-    journals = JournalEntry.query.all()
+# @core_bp.route('/export_income_statement', methods=['GET'])
+# def export_income_statement():
+#     # Reuse the calculation logic from the income_statement view
+#     journals = JournalEntry.query.all()
 
-    total_revenue = total_cogs = total_expense = 0
+#     total_revenue = total_cogs = total_expense = 0
 
-    for j in journals:
-        for line in j.entries():
-            acc = line.get('account', '').lower()
-            debit = float(line.get('debit', 0))
-            credit = float(line.get('credit', 0))
+#     for j in journals:
+#         for line in j.entries():
+#             acc = line.get('account', '').lower()
+#             debit = float(line.get('debit', 0))
+#             credit = float(line.get('credit', 0))
 
-            if 'sales revenue' in acc:
-                total_revenue += credit
-            elif 'cogs' in acc:
-                total_cogs += debit
-            # Note: This list must match the one used in your /income_statement route
-            elif acc in ['rent expense', 'utilities expense', 'salaries expense', 'misc expense']:
-                total_expense += debit
+#             if 'sales revenue' in acc:
+#                 total_revenue += credit
+#             elif 'cogs' in acc:
+#                 total_cogs += debit
+#             # Note: This list must match the one used in your /income_statement route
+#             elif acc in ['rent expense', 'utilities expense', 'salaries expense', 'misc expense']:
+#                 total_expense += debit
 
-    gross_profit = total_revenue - total_cogs
-    net_income = gross_profit - total_expense
+#     gross_profit = total_revenue - total_cogs
+#     net_income = gross_profit - total_expense
 
-    # --- Prepare CSV output ---
-    output = io.StringIO()
-    writer = csv.writer(output)
+#     # --- Prepare CSV output ---
+#     output = io.StringIO()
+#     writer = csv.writer(output)
     
-    writer.writerow(["Description", "Amount (₱)"])
-    writer.writerow(["Sales Revenue", f"{total_revenue:.2f}"])
-    writer.writerow(["Cost of Goods Sold (COGS)", f"{-total_cogs:.2f}"])
-    writer.writerow(["Gross Profit", f"{gross_profit:.2f}"])
-    writer.writerow(["Operating Expenses", f"{-total_expense:.2f}"])
-    writer.writerow(["Net Income", f"{net_income:.2f}"])
+#     writer.writerow(["Description", "Amount (₱)"])
+#     writer.writerow(["Sales Revenue", f"{total_revenue:.2f}"])
+#     writer.writerow(["Cost of Goods Sold (COGS)", f"{-total_cogs:.2f}"])
+#     writer.writerow(["Gross Profit", f"{gross_profit:.2f}"])
+#     writer.writerow(["Operating Expenses", f"{-total_expense:.2f}"])
+#     writer.writerow(["Net Income", f"{net_income:.2f}"])
 
-    output.seek(0)
-    filename = f"income_statement_{datetime.now().strftime('%Y%m%d')}.csv"
+#     output.seek(0)
+#     filename = f"income_statement_{datetime.now().strftime('%Y%m%d')}.csv"
     
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+#     return Response(
+#         output.getvalue(),
+#         mimetype="text/csv",
+#         headers={"Content-Disposition": f"attachment; filename={filename}"}
+#     )
 
 @core_bp.route('/api/product/<sku>')
 def api_product(sku):
@@ -907,256 +953,256 @@ def api_product(sku):
         'quantity': product.quantity
     })
 
-def aggregate_journal_entries(journals):
-    """Aggregates all debit/credit movements by account."""
-    ledger = {}
-    for j in journals:
-        # Use the entries() method from the JournalEntry model
-        for line in j.entries():
-            account = line.get('account')
-            debit = float(line.get('debit', 0) or 0)
-            credit = float(line.get('credit', 0) or 0)
+# def aggregate_journal_entries(journals):
+#     """Aggregates all debit/credit movements by account."""
+#     ledger = {}
+#     for j in journals:
+#         # Use the entries() method from the JournalEntry model
+#         for line in j.entries():
+#             account = line.get('account')
+#             debit = float(line.get('debit', 0) or 0)
+#             credit = float(line.get('credit', 0) or 0)
             
-            if account not in ledger:
-                ledger[account] = {'debit': 0.0, 'credit': 0.0}
+#             if account not in ledger:
+#                 ledger[account] = {'debit': 0.0, 'credit': 0.0}
             
-            ledger[account]['debit'] += debit
-            ledger[account]['credit'] += credit
+#             ledger[account]['debit'] += debit
+#             ledger[account]['credit'] += credit
             
-    return ledger
+#     return ledger
 
 
-@core_bp.route('/general_ledger')
-def general_ledger():
-    # Fetch all journal entries (you might want to add date filters later)
-    journals = JournalEntry.query.order_by(JournalEntry.created_at.asc()).all()
+# @core_bp.route('/general_ledger')
+# def general_ledger():
+#     # Fetch all journal entries (you might want to add date filters later)
+#     journals = JournalEntry.query.order_by(JournalEntry.created_at.asc()).all()
     
-    # Aggregate the data
-    gl_summary = aggregate_journal_entries(journals)
+#     # Aggregate the data
+#     gl_summary = aggregate_journal_entries(journals)
     
-    # Calculate balances for presentation
-    gl_with_balances = []
-    for account, totals in gl_summary.items():
-        balance = totals['debit'] - totals['credit']
-        gl_with_balances.append({
-            'account': account,
-            'debit': totals['debit'],
-            'credit': totals['credit'],
-            'balance': balance,
-            # Determine if it's a Debit (Asset/Expense) or Credit (Lia/Equity/Revenue) balance
-            'balance_type': 'Debit' if balance >= 0 else 'Credit' 
-        })
+#     # Calculate balances for presentation
+#     gl_with_balances = []
+#     for account, totals in gl_summary.items():
+#         balance = totals['debit'] - totals['credit']
+#         gl_with_balances.append({
+#             'account': account,
+#             'debit': totals['debit'],
+#             'credit': totals['credit'],
+#             'balance': balance,
+#             # Determine if it's a Debit (Asset/Expense) or Credit (Lia/Equity/Revenue) balance
+#             'balance_type': 'Debit' if balance >= 0 else 'Credit' 
+#         })
         
-    # Sort accounts alphabetically for easier reading
-    gl_with_balances.sort(key=lambda x: x['account'])
+#     # Sort accounts alphabetically for easier reading
+#     gl_with_balances.sort(key=lambda x: x['account'])
     
-    return render_template('general_ledger.html', gl_data=gl_with_balances)
+#     return render_template('general_ledger.html', gl_data=gl_with_balances)
 
-@core_bp.route('/export_general_ledger', methods=['GET'])
-def export_general_ledger():
-    # Reuse the logic from the general_ledger view
-    journals = JournalEntry.query.order_by(JournalEntry.created_at.asc()).all()
-    gl_summary = aggregate_journal_entries(journals)
+# @core_bp.route('/export_general_ledger', methods=['GET'])
+# def export_general_ledger():
+#     # Reuse the logic from the general_ledger view
+#     journals = JournalEntry.query.order_by(JournalEntry.created_at.asc()).all()
+#     gl_summary = aggregate_journal_entries(journals)
     
-    output = io.StringIO()
-    writer = csv.writer(output)
+#     output = io.StringIO()
+#     writer = csv.writer(output)
     
-    # Write header row
-    writer.writerow(["Account", "Total Debits", "Total Credits", "Balance", "Balance Type"])
+#     # Write header row
+#     writer.writerow(["Account", "Total Debits", "Total Credits", "Balance", "Balance Type"])
 
-    # Write data rows
-    for account, totals in gl_summary.items():
-        balance = totals['debit'] - totals['credit']
-        balance_type = 'Debit' if balance >= 0 else 'Credit'
+#     # Write data rows
+#     for account, totals in gl_summary.items():
+#         balance = totals['debit'] - totals['credit']
+#         balance_type = 'Debit' if balance >= 0 else 'Credit'
         
-        writer.writerow([
-            account,
-            f"{totals['debit']:.2f}",
-            f"{totals['credit']:.2f}",
-            f"{balance:.2f}",
-            balance_type
-        ])
+#         writer.writerow([
+#             account,
+#             f"{totals['debit']:.2f}",
+#             f"{totals['credit']:.2f}",
+#             f"{balance:.2f}",
+#             balance_type
+#         ])
 
-    output.seek(0)
-    filename = f"general_ledger_summary_{datetime.now().strftime('%Y%m%d')}.csv"
+#     output.seek(0)
+#     filename = f"general_ledger_summary_{datetime.now().strftime('%Y%m%d')}.csv"
     
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+#     return Response(
+#         output.getvalue(),
+#         mimetype="text/csv",
+#         headers={"Content-Disposition": f"attachment; filename={filename}"}
+#     )
 
-@core_bp.route('/balance_sheet')
-def balance_sheet():
-    # 1. Get the aggregated ledger data (reusing the logic from GL)
-    journals = JournalEntry.query.all()
-    gl_summary = aggregate_journal_entries(journals)
+# @core_bp.route('/balance_sheet')
+# def balance_sheet():
+#     # 1. Get the aggregated ledger data (reusing the logic from GL)
+#     journals = JournalEntry.query.all()
+#     gl_summary = aggregate_journal_entries(journals)
     
-    # 2. Define account classifications (adjust these based on your exact chart of accounts)
-    account_classes = {
-        'Asset': ['Cash', 'Inventory', 'Accounts Receivable'],
-        'Liability': ['Accounts Payable', 'VAT Payable'],
-        # Net Income from Income Statement will be added to Equity
-        'Equity': ['Owner\'s Equity']
-    }
+#     # 2. Define account classifications (adjust these based on your exact chart of accounts)
+#     account_classes = {
+#         'Asset': ['Cash', 'Inventory', 'Accounts Receivable'],
+#         'Liability': ['Accounts Payable', 'VAT Payable'],
+#         # Net Income from Income Statement will be added to Equity
+#         'Equity': ['Owner\'s Equity']
+#     }
     
-    # 3. Calculate Income for Retained Earnings (Net Income affects Equity)
-    # This relies on your existing income_statement logic
-    journals = JournalEntry.query.all()
-    total_revenue = total_cogs = total_expense = 0
-    for j in journals:
-        for line in j.entries():
-            acc = line.get('account', '').lower()
-            debit = float(line.get('debit', 0))
-            credit = float(line.get('credit', 0))
-            if 'sales revenue' in acc:
-                total_revenue += credit
-            elif 'cogs' in acc:
-                total_cogs += debit
-            elif 'expense' in acc: # Simple check for all expenses
-                total_expense += debit
+#     # 3. Calculate Income for Retained Earnings (Net Income affects Equity)
+#     # This relies on your existing income_statement logic
+#     journals = JournalEntry.query.all()
+#     total_revenue = total_cogs = total_expense = 0
+#     for j in journals:
+#         for line in j.entries():
+#             acc = line.get('account', '').lower()
+#             debit = float(line.get('debit', 0))
+#             credit = float(line.get('credit', 0))
+#             if 'sales revenue' in acc:
+#                 total_revenue += credit
+#             elif 'cogs' in acc:
+#                 total_cogs += debit
+#             elif 'expense' in acc: # Simple check for all expenses
+#                 total_expense += debit
 
-    net_income = total_revenue - total_cogs - total_expense
+#     net_income = total_revenue - total_cogs - total_expense
     
-    # 4. Group balances
-    assets = []
-    liabilities = []
-    equity = []
+#     # 4. Group balances
+#     assets = []
+#     liabilities = []
+#     equity = []
     
-    # Initialize totals
-    total_assets = 0.0
-    total_liabilities = 0.0
+#     # Initialize totals
+#     total_assets = 0.0
+#     total_liabilities = 0.0
     
-    # Process accounts from the ledger
-    for account, totals in gl_summary.items():
-        balance = totals['debit'] - totals['credit']
+#     # Process accounts from the ledger
+#     for account, totals in gl_summary.items():
+#         balance = totals['debit'] - totals['credit']
         
-        # Check against pre-defined asset accounts
-        if account in account_classes['Asset']:
-            assets.append({'account': account, 'balance': balance})
-            total_assets += balance
+#         # Check against pre-defined asset accounts
+#         if account in account_classes['Asset']:
+#             assets.append({'account': account, 'balance': balance})
+#             total_assets += balance
         
-        # Check against pre-defined liability accounts
-        elif account in account_classes['Liability']:
-            liabilities.append({'account': account, 'balance': -balance}) # Liabilities have normal credit balances
-            total_liabilities += -balance
+#         # Check against pre-defined liability accounts
+#         elif account in account_classes['Liability']:
+#             liabilities.append({'account': account, 'balance': -balance}) # Liabilities have normal credit balances
+#             total_liabilities += -balance
             
-        # Check against pre-defined equity accounts
-        elif account in account_classes['Equity']:
-             # Use the balance (normal credit) for existing equity accounts
-            equity.append({'account': account, 'balance': -balance})
+#         # Check against pre-defined equity accounts
+#         elif account in account_classes['Equity']:
+#              # Use the balance (normal credit) for existing equity accounts
+#             equity.append({'account': account, 'balance': -balance})
             
-    # Add Net Income (Retained Earnings) to Equity
-    equity.append({'account': 'Current Period Net Income', 'balance': net_income})
-    total_equity = sum(e['balance'] for e in equity)
+#     # Add Net Income (Retained Earnings) to Equity
+#     equity.append({'account': 'Current Period Net Income', 'balance': net_income})
+#     total_equity = sum(e['balance'] for e in equity)
     
-    # Total Liabilites and Equity
-    total_liabilities_and_equity = total_liabilities + total_equity
+#     # Total Liabilites and Equity
+#     total_liabilities_and_equity = total_liabilities + total_equity
     
-    # Note: For a fully compliant system, you'd need a more robust Chart of Accounts model 
-    # to automatically determine an account's type (Asset, Liability, etc.)
+#     # Note: For a fully compliant system, you'd need a more robust Chart of Accounts model 
+#     # to automatically determine an account's type (Asset, Liability, etc.)
     
-    return render_template(
-        'balance_sheet.html',
-        assets=assets,
-        liabilities=liabilities,
-        equity=equity,
-        total_assets=total_assets,
-        total_liabilities=total_liabilities,
-        total_equity=total_equity,
-        total_liabilities_and_equity=total_liabilities_and_equity
-    )
+#     return render_template(
+#         'balance_sheet.html',
+#         assets=assets,
+#         liabilities=liabilities,
+#         equity=equity,
+#         total_assets=total_assets,
+#         total_liabilities=total_liabilities,
+#         total_equity=total_equity,
+#         total_liabilities_and_equity=total_liabilities_and_equity
+#     )
 
-@core_bp.route('/export_balance_sheet', methods=['GET'])
-def export_balance_sheet():
-    # Reuse the calculation logic from the balance_sheet view
-    journals = JournalEntry.query.all()
-    gl_summary = aggregate_journal_entries(journals)
+# @core_bp.route('/export_balance_sheet', methods=['GET'])
+# def export_balance_sheet():
+#     # Reuse the calculation logic from the balance_sheet view
+#     journals = JournalEntry.query.all()
+#     gl_summary = aggregate_journal_entries(journals)
     
-    # 2. Define account classifications (must match the view logic)
-    account_classes = {
-        'Asset': ['Cash', 'Inventory', 'Accounts Receivable'],
-        'Liability': ['Accounts Payable', 'VAT Payable'],
-        'Equity': ['Owner\'s Equity']
-    }
+#     # 2. Define account classifications (must match the view logic)
+#     account_classes = {
+#         'Asset': ['Cash', 'Inventory', 'Accounts Receivable'],
+#         'Liability': ['Accounts Payable', 'VAT Payable'],
+#         'Equity': ['Owner\'s Equity']
+#     }
     
-    # 3. Calculate Net Income (must match the view logic)
-    # Note: For production, this should be a dedicated utility function
-    total_revenue = total_cogs = total_expense = 0
-    for j in journals:
-        for line in j.entries():
-            acc = line.get('account', '').lower()
-            debit = float(line.get('debit', 0))
-            credit = float(line.get('credit', 0))
-            if 'sales revenue' in acc:
-                total_revenue += credit
-            elif 'cogs' in acc:
-                total_cogs += debit
-            elif 'expense' in acc: 
-                total_expense += debit
+#     # 3. Calculate Net Income (must match the view logic)
+#     # Note: For production, this should be a dedicated utility function
+#     total_revenue = total_cogs = total_expense = 0
+#     for j in journals:
+#         for line in j.entries():
+#             acc = line.get('account', '').lower()
+#             debit = float(line.get('debit', 0))
+#             credit = float(line.get('credit', 0))
+#             if 'sales revenue' in acc:
+#                 total_revenue += credit
+#             elif 'cogs' in acc:
+#                 total_cogs += debit
+#             elif 'expense' in acc: 
+#                 total_expense += debit
 
-    net_income = total_revenue - total_cogs - total_expense
+#     net_income = total_revenue - total_cogs - total_expense
     
-    # 4. Group balances and calculate totals
-    assets_data = []
-    liabilities_data = []
-    equity_data = []
-    total_assets = 0.0
-    total_liabilities = 0.0
+#     # 4. Group balances and calculate totals
+#     assets_data = []
+#     liabilities_data = []
+#     equity_data = []
+#     total_assets = 0.0
+#     total_liabilities = 0.0
     
-    for account, totals in gl_summary.items():
-        balance = totals['debit'] - totals['credit']
+#     for account, totals in gl_summary.items():
+#         balance = totals['debit'] - totals['credit']
         
-        if account in account_classes['Asset']:
-            assets_data.append({'account': account, 'balance': balance})
-            total_assets += balance
-        elif account in account_classes['Liability']:
-            liabilities_data.append({'account': account, 'balance': -balance})
-            total_liabilities += -balance
-        elif account in account_classes['Equity']:
-            equity_data.append({'account': account, 'balance': -balance})
+#         if account in account_classes['Asset']:
+#             assets_data.append({'account': account, 'balance': balance})
+#             total_assets += balance
+#         elif account in account_classes['Liability']:
+#             liabilities_data.append({'account': account, 'balance': -balance})
+#             total_liabilities += -balance
+#         elif account in account_classes['Equity']:
+#             equity_data.append({'account': account, 'balance': -balance})
             
-    equity_data.append({'account': 'Current Period Net Income', 'balance': net_income})
-    total_equity = sum(e['balance'] for e in equity_data)
-    total_liabilities_and_equity = total_liabilities + total_equity
+#     equity_data.append({'account': 'Current Period Net Income', 'balance': net_income})
+#     total_equity = sum(e['balance'] for e in equity_data)
+#     total_liabilities_and_equity = total_liabilities + total_equity
     
-    # --- Prepare CSV output ---
-    output = io.StringIO()
-    writer = csv.writer(output)
+#     # --- Prepare CSV output ---
+#     output = io.StringIO()
+#     writer = csv.writer(output)
     
-    # Write Assets Section
-    writer.writerow(["ASSETS", ""])
-    for item in assets_data:
-        writer.writerow([item['account'], f"{item['balance']:.2f}"])
-    writer.writerow(["TOTAL ASSETS", f"{total_assets:.2f}"])
-    writer.writerow([]) # Blank line for separation
+#     # Write Assets Section
+#     writer.writerow(["ASSETS", ""])
+#     for item in assets_data:
+#         writer.writerow([item['account'], f"{item['balance']:.2f}"])
+#     writer.writerow(["TOTAL ASSETS", f"{total_assets:.2f}"])
+#     writer.writerow([]) # Blank line for separation
     
-    # Write Liabilities Section
-    writer.writerow(["LIABILITIES", ""])
-    for item in liabilities_data:
-        writer.writerow([item['account'], f"{item['balance']:.2f}"])
-    writer.writerow(["TOTAL LIABILITIES", f"{total_liabilities:.2f}"])
-    writer.writerow([])
+#     # Write Liabilities Section
+#     writer.writerow(["LIABILITIES", ""])
+#     for item in liabilities_data:
+#         writer.writerow([item['account'], f"{item['balance']:.2f}"])
+#     writer.writerow(["TOTAL LIABILITIES", f"{total_liabilities:.2f}"])
+#     writer.writerow([])
     
-    # Write Equity Section
-    writer.writerow(["EQUITY", ""])
-    for item in equity_data:
-        writer.writerow([item['account'], f"{item['balance']:.2f}"])
-    writer.writerow(["TOTAL EQUITY", f"{total_equity:.2f}"])
-    writer.writerow([])
+#     # Write Equity Section
+#     writer.writerow(["EQUITY", ""])
+#     for item in equity_data:
+#         writer.writerow([item['account'], f"{item['balance']:.2f}"])
+#     writer.writerow(["TOTAL EQUITY", f"{total_equity:.2f}"])
+#     writer.writerow([])
     
-    # Write Summary Row
-    writer.writerow(["TOTAL LIABILITIES & EQUITY", f"{total_liabilities_and_equity:.2f}"])
+#     # Write Summary Row
+#     writer.writerow(["TOTAL LIABILITIES & EQUITY", f"{total_liabilities_and_equity:.2f}"])
 
 
-    output.seek(0)
-    filename = f"balance_sheet_{datetime.now().strftime('%Y%m%d')}.csv"
+#     output.seek(0)
+#     filename = f"balance_sheet_{datetime.now().strftime('%Y%m%d')}.csv"
     
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
+#     return Response(
+#         output.getvalue(),
+#         mimetype="text/csv",
+#         headers={"Content-Disposition": f"attachment; filename={filename}"}
+#     )
 
 
 # --- ADD THIS LOGIN ROUTE ---
@@ -1319,17 +1365,17 @@ def adjust_stock():
         adjustment_value = abs(quantity) * product.cost_price
         
         if quantity < 0: # Stock reduction (loss)
-            debit_account = "Inventory Loss" # Make sure this account exists
-            credit_account = "Inventory"
+            debit_account_code = "505"  # 505: Inventory Loss
+            credit_account_code = "120" # 120: Inventory
             desc = f"Stock loss for {product.name}: {reason}"
         else: # Stock increase (gain)
-            debit_account = "Inventory"
-            credit_account = "Inventory Gain" # Make sure this account exists
+            debit_account_code = "120"  # 120: Inventory
+            credit_account_code = "406" # 406: Inventory Gain
             desc = f"Stock gain for {product.name}: {reason}"
 
         je_lines = [
-            {"account": debit_account, "debit": adjustment_value, "credit": 0},
-            {"account": credit_account, "debit": 0, "credit": adjustment_value}
+            {"account_code": debit_account_code, "debit": adjustment_value, "credit": 0},
+            {"account_code": credit_account_code, "debit": 0, "credit": adjustment_value}
         ]
         journal = JournalEntry(description=desc, entries_json=json.dumps(je_lines))
         db.session.add(journal)

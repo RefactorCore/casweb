@@ -1,25 +1,34 @@
-from flask import Blueprint, render_template, request
+from flask import Blueprint, render_template, request, abort, Response
 from flask_login import login_required
 # Add CompanyProfile, Customer, Supplier, CreditMemo
 from models import db, JournalEntry, Account, Sale, Purchase, Product, ARInvoice, APInvoice, CompanyProfile, Customer, Supplier, CreditMemo, Payment, SaleItem, PurchaseItem
 from collections import defaultdict
 import json
 from sqlalchemy import func, extract, cast, Date
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from routes.decorators import role_required
+import io
+import csv
 
 reports_bp = Blueprint('reports', __name__, url_prefix='/reports')
 
 
 def aggregate_account_balances():
-    """Return dict: account_name -> balance (debit - credit)."""
+    """
+    Return dict: account_code -> balance (debit - credit).
+    This is the new core of all reporting.
+    """
     agg = defaultdict(float)
     for je in JournalEntry.query.all():
         for line in je.entries():
-            acc = line.get('account')
+            # --- MODIFIED: Use 'account_code' instead of 'account' ---
+            acc_code = line.get('account_code') 
+            if not acc_code:
+                continue # Skip old/invalid entries
+                
             debit = float(line.get('debit', 0) or 0)
             credit = float(line.get('credit', 0) or 0)
-            agg[acc] += debit - credit
+            agg[acc_code] += debit - credit
     return dict(agg)
 
 
@@ -31,29 +40,47 @@ def trial_balance():
     tb = []
     total_debit = 0.0
     total_credit = 0.0
-    for acc, val in agg.items():
+    
+    # --- MODIFIED: Loop through codes, then find the name ---
+    for acc_code, val in agg.items():
+        # Find the account in the DB to get its name
+        acc_details = Account.query.filter_by(code=acc_code).first()
+        acc_name = acc_details.name if acc_details else f"Unknown ({acc_code})"
+        
         if val >= 0:
-            tb.append({'account': acc, 'debit': val, 'credit': 0.0})
+            # Pass both code and name to the template
+            tb.append({'code': acc_code, 'name': acc_name, 'debit': val, 'credit': 0.0})
             total_debit += val
         else:
-            tb.append({'account': acc, 'debit': 0.0, 'credit': -val})
+            tb.append({'code': acc_code, 'name': acc_name, 'debit': 0.0, 'credit': -val})
             total_credit += -val
+            
+    # Sort by code for a standard Trial Balance view
+    tb.sort(key=lambda x: x['code'])
+    
     return render_template('trial_balance.html', tb=tb, total_debit=total_debit, total_credit=total_credit)
 
 
-@reports_bp.route('/ledger/<account>')
+# --- MODIFIED: Route now uses account_code ---
+@reports_bp.route('/ledger/<code>')
 @login_required
 @role_required('Admin', 'Accountant')
-def ledger(account):
+def ledger(code):
+    # Get the account details from the code
+    account = Account.query.filter_by(code=code).first_or_404()
+    
     rows = []
     balance = 0.0
     for je in JournalEntry.query.order_by(JournalEntry.created_at).all():
         for line in je.entries():
-            if line.get('account') == account:
+            # --- MODIFIED: Check for 'account_code' ---
+            if line.get('account_code') == code:
                 debit = float(line.get('debit', 0) or 0)
                 credit = float(line.get('credit', 0) or 0)
                 balance += debit - credit
                 rows.append({'date': je.created_at, 'desc': je.description, 'debit': debit, 'credit': credit, 'balance': balance})
+    
+    # Pass the full account object to the template
     return render_template('ledger.html', account=account, rows=rows, balance=balance)
 
 
@@ -63,25 +90,45 @@ def ledger(account):
 def balance_sheet():
     agg = aggregate_account_balances()
     assets, liabilities, equity = [], [], []
-    for acc, bal in agg.items():
-        acct_rec = Account.query.filter_by(name=acc).first()
-        typ = acct_rec.type if acct_rec else None
-        if typ == 'Asset' or (typ is None and bal >= 0):
-            assets.append((acc, bal if bal >= 0 else 0.0))
-        elif typ == 'Liability':
-            liabilities.append((acc, -bal if bal < 0 else bal))
-        elif typ == 'Equity':
-            equity.append((acc, bal))
-        else:
-            # fallback simple rule
-            if bal >= 0:
-                assets.append((acc, bal))
-            else:
-                liabilities.append((acc, -bal))
+    
+    # --- MODIFIED: This logic is now much cleaner ---
+    for acc_code, bal in agg.items():
+        acct_rec = Account.query.filter_by(code=acc_code).first()
+        
+        # Skip if we can't find the account
+        if not acct_rec:
+            continue 
+            
+        acc_name = acct_rec.name
+        acc_type = acct_rec.type
+
+        if acc_type == 'Asset':
+            # Assets have a normal Debit balance
+            assets.append((acc_name, bal))
+        elif acc_type == 'Liability':
+            # Liabilities have a normal Credit balance (bal will be negative)
+            liabilities.append((acc_name, -bal))
+        elif acc_type == 'Equity':
+            # Equity has a normal Credit balance (bal will be negative)
+            equity.append((acc_name, -bal))
+
+    # --- ADDED: Calculate Net Income to make the Balance Sheet balance ---
+    # (This logic is copied from the new income_statement function below)
+    net_income = 0.0
+    revenues = {code: -bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Revenue').first()}
+    expenses = {code: bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Expense').first()}
+    total_revenue = sum(revenues.values())
+    total_expense = sum(expenses.values())
+    net_income = total_revenue - total_expense
+    
+    # Add Net Income (as Retained Earnings) to Equity
+    equity.append(("Current Period Net Income", net_income))
+    # --- End of Net Income block ---
 
     total_assets = sum(b for a, b in assets)
     total_liabilities = sum(b for a, b in liabilities)
     total_equity = sum(b for a, b in equity)
+    
     return render_template('balance_sheet.html', assets=assets, liabilities=liabilities, equity=equity,
                            total_assets=total_assets, total_liabilities=total_liabilities, total_equity=total_equity)
 
@@ -91,25 +138,76 @@ def balance_sheet():
 @role_required('Admin', 'Accountant')
 def income_statement():
     agg = aggregate_account_balances()
-    # Identify revenues and expenses heuristically
-    revenues = {k: -v for k, v in agg.items() if 'Sales' in k or 'Revenue' in k}
-    expenses = {k: v for k, v in agg.items() if 'COGS' in k or 'Expense' in k or 'Cost' in k}
+    
+    # --- MODIFIED: This now uses Account.type, which is robust ---
+    revenues, expenses = {}, {}
+
+    for acc_code, bal in agg.items():
+        acct_rec = Account.query.filter_by(code=acc_code).first()
+        if not acct_rec:
+            continue
+
+        acc_name = acct_rec.name
+        acc_type = acct_rec.type
+
+        if acc_type == 'Revenue':
+            # Revenues have a normal Credit balance (bal will be negative)
+            revenues[acc_name] = -bal
+        elif acc_type == 'Expense':
+            # Expenses have a normal Debit balance (bal will be positive)
+            expenses[acc_name] = bal
+
     total_revenue = sum(revenues.values())
     total_expense = sum(expenses.values())
     net_income = total_revenue - total_expense
+    
     return render_template('income_statement.html', revenues=revenues, expenses=expenses,
                            total_revenue=total_revenue, total_expense=total_expense, net_income=net_income)
 
-
+#
+# --- All other routes (VAT, Sales, Purchases, etc.) remain the same ---
+# ... (keep all your other routes from vat_report() down to stock_card()) ...
+#
 @reports_bp.route('/vat-report')
 @login_required
 @role_required('Admin', 'Accountant')
 def vat_report():
-    sales = Sale.query.all()
-    total_sales = sum(s.total - s.vat for s in sales)
-    total_vat = sum(s.vat for s in sales)
-    journals = JournalEntry.query.order_by(JournalEntry.created_at.desc()).all()
-    return render_template('vat_report.html', total_sales=total_sales, total_vat=total_vat, journals=journals)
+    # --- This is the new, correct logic ---
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+
+    sale_query = Sale.query
+    purchase_query = Purchase.query
+
+    if start_date:
+        sale_query = sale_query.filter(Sale.created_at >= start_date)
+        purchase_query = purchase_query.filter(Purchase.created_at >= start_date)
+    if end_date:
+        # Add one day to end_date to make it inclusive
+        end_date_inclusive = end_date + timedelta(days=1)
+        sale_query = sale_query.filter(Sale.created_at < end_date_inclusive)
+        purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
+
+    # Use .all() here to get the data
+    sales = sale_query.all()
+    purchases = purchase_query.all()
+
+    sale_vat = sum(s.vat or 0 for s in sales)
+    purchase_vat = sum(p.vat or 0 for p in purchases)
+    vat_payable = sale_vat - purchase_vat
+
+    # --- This now passes the correct variables to the template ---
+    return render_template(
+        'vat_report.html',
+        sale_vat=sale_vat,
+        purchase_vat=purchase_vat,
+        vat_payable=vat_payable,
+        start_date=start_date_str,
+        end_date=end_date_str
+    )
 
 
 @reports_bp.route('/sales')
@@ -363,3 +461,206 @@ def stock_card(product_id):
         t['balance'] = running_balance
         
     return render_template('stock_card.html', product=product, transactions=transactions)
+
+
+@reports_bp.route('/export/balance-sheet')
+@login_required
+@role_required('Admin', 'Accountant')
+def export_balance_sheet():
+    """Exports the balance sheet to CSV."""
+    agg = aggregate_account_balances()
+    assets, liabilities, equity = [], [], []
+
+    # --- Re-run the balance_sheet logic ---
+    for acc_code, bal in agg.items():
+        acct_rec = Account.query.filter_by(code=acc_code).first()
+        if not acct_rec: continue
+        
+        acc_name = acct_rec.name
+        acc_type = acct_rec.type
+
+        if acc_type == 'Asset':
+            assets.append((acc_name, bal))
+        elif acc_type == 'Liability':
+            liabilities.append((acc_name, -bal))
+        elif acc_type == 'Equity':
+            equity.append((acc_name, -bal))
+
+    revenues = {code: -bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Revenue').first()}
+    expenses = {code: bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Expense').first()}
+    total_revenue = sum(revenues.values())
+    total_expense = sum(expenses.values())
+    net_income = total_revenue - total_expense
+    
+    equity.append(("Current Period Net Income", net_income))
+    
+    total_assets = sum(b for a, b in assets)
+    total_liabilities = sum(b for a, b in liabilities)
+    total_equity = sum(b for a, b in equity)
+    total_liabilities_and_equity = total_liabilities + total_equity
+    # --- End of logic ---
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    writer.writerow(["ASSETS", "Amount"])
+    for name, balance in assets:
+        writer.writerow([name, f"{balance:.2f}"])
+    writer.writerow(["TOTAL ASSETS", f"{total_assets:.2f}"])
+    writer.writerow([])
+    
+    writer.writerow(["LIABILITIES", "Amount"])
+    for name, balance in liabilities:
+        writer.writerow([name, f"{balance:.2f}"])
+    writer.writerow(["TOTAL LIABILITIES", f"{total_liabilities:.2f}"])
+    writer.writerow([])
+    
+    writer.writerow(["EQUITY", "Amount"])
+    for name, balance in equity:
+        writer.writerow([name, f"{balance:.2f}"])
+    writer.writerow(["TOTAL EQUITY", f"{total_equity:.2f}"])
+    writer.writerow([])
+    
+    writer.writerow(["TOTAL LIABILITIES & EQUITY", f"{total_liabilities_and_equity:.2f}"])
+
+    output.seek(0)
+    filename = f"balance_sheet_{datetime.now().strftime('%Y%m%d')}.csv"
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@reports_bp.route('/export/income-statement')
+@login_required
+@role_required('Admin', 'Accountant')
+def export_income_statement():
+    """Exports the income statement to CSV."""
+    agg = aggregate_account_balances()
+    
+    # --- Re-run the income_statement logic ---
+    revenues, expenses = {}, {}
+    for acc_code, bal in agg.items():
+        acct_rec = Account.query.filter_by(code=acc_code).first()
+        if not acct_rec: continue
+        
+        if acct_rec.type == 'Revenue':
+            revenues[acct_rec.name] = -bal
+        elif acct_rec.type == 'Expense':
+            expenses[acct_rec.name] = bal
+
+    total_revenue = sum(revenues.values())
+    total_expense = sum(expenses.values())
+    net_income = total_revenue - total_expense
+    # --- End of logic ---
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    writer.writerow(["REVENUES", "Amount"])
+    for name, balance in revenues.items():
+        writer.writerow([name, f"{balance:.2f}"])
+    writer.writerow(["Total Revenue", f"{total_revenue:.2f}"])
+    writer.writerow([])
+    
+    writer.writerow(["EXPENSES", "Amount"])
+    for name, balance in expenses.items():
+        writer.writerow([name, f"{balance:.2f}"])
+    writer.writerow(["Total Expenses", f"{total_expense:.2f}"])
+    writer.writerow([])
+    
+    writer.writerow(["NET INCOME", f"{net_income:.2f}"])
+
+    output.seek(0)
+    filename = f"income_statement_{datetime.now().strftime('%Y%m%d')}.csv"
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+def parse_date(date_str):
+    """Helper to safely parse YYYY-MM-DD format strings."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+@reports_bp.route('/export/vat-report')
+@login_required
+@role_required('Admin', 'Accountant')
+def export_vat_report():
+    """Exports the VAT report to CSV."""
+    start_date = parse_date(request.args.get("start_date"))
+    end_date = parse_date(request.args.get("end_date"))
+
+    # --- Re-run the vat_report logic ---
+    sale_query = Sale.query
+    purchase_query = Purchase.query
+
+    if start_date:
+        sale_query = sale_query.filter(Sale.created_at >= start_date)
+        purchase_query = purchase_query.filter(Purchase.created_at >= start_date)
+    if end_date:
+        # Add one day to end_date to make it inclusive
+        end_date_inclusive = end_date + timedelta(days=1)
+        sale_query = sale_query.filter(Sale.created_at < end_date_inclusive)
+        purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
+
+    # Use .all() here to get the data
+    sales = sale_query.all()
+    purchases = purchase_query.all()
+
+    sale_vat = sum(s.vat or 0 for s in sales)
+    purchase_vat = sum(p.vat or 0 for p in purchases)
+    vat_payable = sale_vat - purchase_vat
+    # --- End of logic ---
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["Type", "Amount (₱)"])
+    writer.writerow(["Input VAT (from Purchases)", f"{purchase_vat:.2f}"])
+    writer.writerow(["Output VAT (from Sales)", f"{sale_vat:.2f}"])
+
+    if vat_payable >= 0:
+        writer.writerow(["VAT Payable", f"{vat_payable:.2f}"])
+    else:
+        writer.writerow(["VAT Refund", f"{abs(vat_payable):.2f}"])
+
+    output.seek(0)
+    filename = f"vat_report_{datetime.now().strftime('%Y%m%d')}.csv"
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+# Add this function to the end of reports.py
+@reports_bp.route('/export/trial-balance')
+@login_required
+@role_required('Admin', 'Accountant')
+def export_trial_balance():
+    """Exports the trial balance to CSV."""
+    agg = aggregate_account_balances()
+    
+    # --- Re-run the trial_balance logic ---
+    tb = []
+    total_debit = 0.0
+    total_credit = 0.0
+    for acc_code, val in agg.items():
+        acc_details = Account.query.filter_by(code=acc_code).first()
+        acc_name = acc_details.name if acc_details else f"Unknown ({acc_code})"
+        
+        if val >= 0:
+            tb.append({'code': acc_code, 'name': acc_name, 'debit': val, 'credit': 0.0})
+            total_debit += val
+        else:
+            tb.append({'code': acc_code, 'name': acc_name, 'debit': 0.0, 'credit': -val})
+            total_credit += -val
+    tb.sort(key=lambda x: x['code'])
+    # --- End of logic ---
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    writer.writerow(["Code", "Account Name", "Debit", "Credit"])
+    for row in tb:
+        writer.writerow([row['code'], row['name'], f"{row['debit']:.2f}", f"{row['credit']:.2f}"])
+    writer.writerow([])
+    writer.writerow(["Totals", "", f"{total_debit:.2f}", f"{total_credit:.2f}"])
+
+    output.seek(0)
+    filename = f"trial_balance_{datetime.now().strftime('%Y%m%d')}.csv"
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
