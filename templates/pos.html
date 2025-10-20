@@ -104,7 +104,7 @@
         <strong>{{ p.name }}</strong><br>
         <small>{{ p.sku }}</small><br>
         <span class="badge bg-success">₱{{ "%.2f"|format(p.sale_price) }}</span>
-        <br><span class="badge bg-info text-dark">Stock: {{ p.quantity }}</span>
+        <br><span class="badge bg-info text-dark product-quantity">Stock: {{ p.quantity }}</span>
       </div>
     </div>
     {% endfor %}
@@ -230,6 +230,11 @@ async function finishCheckout() {
     const receipt = generateReceipt(cart, total, cash, change);
     document.getElementById('receiptText').innerText = receipt;
     new bootstrap.Modal(document.getElementById('receiptModal')).show();
+    
+    // --- THIS IS THE NEW LINE ---
+    updateStockOnPage(cart); 
+    // --- END OF NEW LINE ---
+
     cart = [];
     renderCart();
     document.getElementById('cashInput').value = '';
@@ -238,6 +243,30 @@ async function finishCheckout() {
     alert(data.error || 'Error during checkout.');
   }
 }
+
+// --- THIS IS THE NEW FUNCTION ---
+function updateStockOnPage(cartItems) {
+  for (const item of cartItems) {
+    // Find the product card on the page using the data-sku
+    const productCard = document.querySelector(`.product-card[data-sku="${item.sku}"]`);
+    if (productCard) {
+      // Find the quantity span inside that card
+      const qtySpan = productCard.querySelector('.product-quantity');
+      if (qtySpan) {
+        // Get the current quantity from the text
+        const currentQtyText = qtySpan.textContent.replace('Stock: ', '');
+        let currentQty = parseInt(currentQtyText, 10);
+        
+        // Calculate and update the new quantity
+        if (!isNaN(currentQty)) {
+          let newQty = currentQty - item.qty;
+          qtySpan.textContent = `Stock: ${newQty}`;
+        }
+      }
+    }
+  }
+}
+// --- END OF NEW FUNCTION ---
 
 function generateReceipt(cart, total, cash, change) {
   let text = "       🧾 SIMPLE POS RECEIPT\n";

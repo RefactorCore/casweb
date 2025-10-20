@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-lg-8 col-md-10 mx-auto">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-primary text-white">
+                    <h4 class="mb-0">Bulk Add Products via CSV</h4>
+                </div>
+                <div class="card-body">
+                    <p>Upload a CSV file to add multiple products at once. This is ideal for setting up your initial inventory.</p>
+                    <p>Your CSV file must have the following columns in this exact order:</p>
+                    <p><code>sku, name, sale_price, cost_price, quantity</code></p>
+                    
+                    <div class="alert alert-info">
+                        <strong>Note:</strong> The <code>quantity</code> column will be used to create a "Beginning Balance" journal entry for each product (Debit Inventory, Credit Opening Balance Equity).
+                    </div>
+
+                    <form action="{{ url_for('core.inventory_bulk_add') }}" method="POST" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="csv_file" class="form-label">CSV File</label>
+                            <input class="form-control" type="file" id="csv_file" name="csv_file" accept=".csv" required>
+                        </div>
+                        <div class="d-flex justify-content-end">
+                            <button type="submit" class="btn btn-primary px-5">
+                                <i class="bi bi-upload me-2"></i> Upload and Process
+                            </button>
+                        </div>
+                    </form>
+                    
+                    <hr class="my-4">
+                    
+                    <h5>Example CSV Format:</h5>
+<pre class="bg-light p-3 rounded">
+sku,name,sale_price,cost_price,quantity
+SKU-001,Sample Product A,150.00,100.00,50
+SKU-002,Sample Product B,25.50,15.00,200
+SKU-003,Non-Stock Item,500.00,0.00,0
+</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

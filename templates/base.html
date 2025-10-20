@@ -5,7 +5,6 @@
   <title>Coretally</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   
-  <!-- Bootstrap + Icons -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
 
@@ -70,7 +69,6 @@
 </head>
 
 <body>
-  <!-- Sidebar -->
   <div class="sidebar">
     <div class="px-3 mb-3">
       <h5 class="fw-bold text-white mb-0">💼 Coretally</h5>
@@ -90,7 +88,7 @@
       <a href="{{ url_for('core.purchase') }}" class="{% if '/purchase' == request.path %}active{% endif %}">
         <i class="bi bi-bag-plus me-2"></i> New Purchase
       </a>
-      <a href="{{ url_for('core.purchases') }}" class="{% if '/purchases' in request.path %}active{% endif %}">
+      <a href="{{ url_for('core.purchases') }}" class="{% if '/purchases' == request.path or '/purchase/' in request.path %}active{% endif %}">
         <i class="bi bi-bag-check me-2"></i> Purchases
       </a>
       <a href="{{ url_for('core.sales') }}" class="{% if '/sales' in request.path %}active{% endif %}">
@@ -105,7 +103,10 @@
       <a href="{{ url_for('core.journal_entries') }}" class="{% if '/journal-entries' in request.path %}active{% endif %}">
         <i class="bi bi-journal-text me-2"></i> Journals
       </a>
-      <a href="{{ url_for('accounts.chart_of_accounts') }}" class="{% if '/accounts' in request.path %}active{% endif %}">
+      <a href="{{ url_for('accounts.new_journal_entry_form') }}" class="{% if 'journal/new' in request.path %}active{% endif %}">
+        <i class="bi bi-plus-circle me-2"></i> New Journal Entry
+      </a>
+      <a href="{{ url_for('accounts.chart_of_accounts') }}" class="{% if request.endpoint == 'accounts.chart_of_accounts' %}active{% endif %}">
         <i class="bi bi-list-columns-reverse me-2"></i> Chart of Accounts
       </a>
 
@@ -189,7 +190,7 @@
           <a href="{{ url_for('reports.vat_return') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.vat_return' %}active{% endif %}">
             - VAT Return
           </a>
-          <a href="{{ url_for('reports.summary_list_sales') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_sales' %}active{% endif %}">
+          <a href="{{ url_for('reports.summary_list_sales') }}" classs="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_sales' %}active{% endif %}">
             - Summary List of Sales
           </a>
           <a href="{{ url_for('reports.summary_list_purchases') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_purchases' %}active{% endif %}">
@@ -210,13 +211,12 @@
         <i class="bi bi-shield-check me-2"></i> Audit Log
       </a>
       <a href="{{ url_for('core.settings') }}" class="{% if '/settings' in request.path %}active{% endif %}">
-        <i class="bi bi-gear me-2"></i> Settings
+S        <i class="bi bi-gear me-2"></i> Settings
       </a>
       {% endif %}
     </nav>
   </div>
 
-  <!-- Main -->
   <div class="main-content">
     <header>
       <h1>{{ company.name if company else 'Coretally' }}</h1>

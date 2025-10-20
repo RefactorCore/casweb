@@ -27,6 +27,10 @@
       <i class="bi bi-plus-circle me-1"></i> Add Product
     </button>
 
+    <a href="{{ url_for('core.inventory_bulk_add') }}" class="btn btn-success ms-2">
+    <i class="bi bi-upload me-1"></i> Bulk Add (CSV)
+    </a>
+
     <button class="btn btn-warning ms-2" data-bs-toggle="modal" data-bs-target="#adjustStockModal">
       <i class="bi bi-arrow-down-up me-1"></i> Adjust Stock
     </button>
@@ -151,14 +155,15 @@
         <div class="table-responsive">
           <table class="table table-sm" id="multiProductTable">
             <thead>
-              <tr>
-                <th style="width: 20%">SKU</th>
-                <th style="width: 40%">Name</th>
-                <th style="width: 20%">Sale Price</th>
-                <th style="width: 20%">Cost Price</th>
-                <th style="width: 10%"><button type="button" class="btn btn-sm btn-outline-success" onclick="addRow()">+</button></th>
-              </tr>
-            </thead>
+                <tr>
+                  <th style="width: 20%">SKU</th>
+                  <th style="width: 30%">Name</th>
+                  <th style="width: 15%">Sale Price</th>
+                  <th style="width: 15%">Cost Price</th>
+                  <th style="width: 15%">Initial Qty</th>
+                  <th style="width: 5%"><button type="button" class="btn btn-sm btn-outline-success" onclick="addRow()">+</button></th>
+                </tr>
+              </thead>
             <tbody>
               </tbody>
           </table>
@@ -217,8 +222,9 @@
       newRow.innerHTML = `
           <td><input type="text" class="form-control form-control-sm" name="sku" required></td>
           <td><input type="text" class="form-control form-control-sm" name="name" required></td>
-          <td><input type="number" step="0.01" class="form-control form-control-sm" name="sale_price" required></td>
-          <td><input type="number" step="0.01" class="form-control form-control-sm" name="cost_price" required></td>
+          <td><input type="number" step="0.01" class="form-control form-control-sm" name="sale_price" value="0.00" required></td>
+          <td><input type="number" step="0.01" class="form-control form-control-sm" name="cost_price" value="0.00" required></td>
+          <td><input type="number" step="1" class="form-control form-control-sm" name="quantity" value="0" title="Set this for beginning inventory only." required></td>
           <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">-</button></td>
       `;
   }
@@ -242,7 +248,7 @@
               }
           });
 
-          // Only push rows that actually have an SKU
+          // Only push rows that actually have an SKU and Name
           if (product.sku && product.name) {
                products.push(product);
           }
@@ -272,7 +278,7 @@
           new bootstrap.Modal(document.getElementById('addProductModal')).hide(); // Hide the modal
           location.reload();
       } else {
-          alert('Error adding products: ' + (data.error || 'Unknown error'));
+          alert('Error adding products: ' (data.error || 'Unknown error'));
       }
   }
 
