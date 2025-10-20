@@ -79,44 +79,51 @@ def index():
     products = Product.query.all()
     low_stock = [p for p in products if p.quantity <= 5]
 
-    # --- Summary data (ALL TIME) ---
-    total_sales = db.session.query(func.sum(Sale.total)).scalar() or 0
-    total_purchases = db.session.query(func.sum(Purchase.total)).scalar() or 0
+    # --- UNFILTERED (All-Time) Inventory Totals ---
+    # These are point-in-time values and should not be filtered by date.
     total_inventory_value = sum(p.cost_price * p.quantity for p in products)
-    
-    # --- MODIFIED: Count products with quantity > 0 ---
     products_in_stock = Product.query.filter(Product.quantity > 0).count()
 
-    # --- Income summary (ALL TIME) ---
-    net_income = total_sales - total_purchases
-    
-    # --- The rest of the function remains the same... ---
-    today = datetime.utcnow()
-    last_30_days_ago = today - timedelta(days=30)
-    last_12_hours_ago = today - timedelta(hours=12)
-
-    sales_30d = db.session.query(func.sum(Sale.total)).filter(
-        Sale.created_at >= last_30_days_ago
-    ).scalar() or 0
-    purchases_30d = db.session.query(func.sum(Purchase.total)).filter(
-        Purchase.created_at >= last_30_days_ago
-    ).scalar() or 0
-    net_income_30d = sales_30d - purchases_30d
-
-    sales_12h = db.session.query(func.sum(Sale.total)).filter(
-        Sale.created_at >= last_12_hours_ago
-    ).scalar() or 0
-    purchases_12h = db.session.query(func.sum(Purchase.total)).filter(
-        Purchase.created_at >= last_12_hours_ago
-    ).scalar() or 0
-    net_income_12h = sales_12h - purchases_12h
-
+    # --- Get period filter (default to '7' days) ---
     period = request.args.get('period', '7')
+    today = datetime.utcnow()
+    start_date = None
+    current_filter_label = ''
+
+    # --- Set start_date and label based on the period ---
+    if period == '12':
+        start_date = today - timedelta(hours=12)
+        current_filter_label = 'Last 12 Hours'
+    elif period == '30':
+        start_date = today - timedelta(days=30)
+        current_filter_label = 'Last 30 Days'
+    elif period == 'all':
+        current_filter_label = 'All Time'
+        # start_date remains None, so queries won't be filtered
+    else:
+        # Default to 7 Days
+        period = '7' # Explicitly set for the button highlighting
+        start_date = today - timedelta(days=7)
+        current_filter_label = 'Last 7 Days'
+
+    # --- Build FILTERED queries for Sales and Purchases ---
+    sales_query = db.session.query(func.sum(Sale.total))
+    purchases_query = db.session.query(func.sum(Purchase.total))
+
+    if start_date:
+        sales_query = sales_query.filter(Sale.created_at >= start_date)
+        purchases_query = purchases_query.filter(Purchase.created_at >= start_date)
+
+    # --- Execute FILTERED queries ---
+    total_sales = sales_query.scalar() or 0
+    total_purchases = purchases_query.scalar() or 0
+    net_income = total_sales - total_purchases # This is now also filtered
+
+    # --- Charting Logic ---
     sales_by_period = []
     labels = []
-    current_filter_label = ''
+    
     if period == '12':
-        current_filter_label = 'Last 12 Hours'
         intervals = [today - timedelta(hours=i) for i in range(11, -1, -1)]
         for hour_start in intervals:
             hour_end = hour_start + timedelta(hours=1)
@@ -126,17 +133,20 @@ def index():
     else:
         if period == '30':
             days = 30
-            current_filter_label = 'Last 30 Days'
-        else:
+        elif period == '7':
             days = 7
-            current_filter_label = 'Last 7 Days'
+        else: # 'all'
+            # For 'All Time', let's default to a 90-day chart view so it's not overwhelming
+            days = 90
+            
         today_date = datetime.utcnow().date()
         last_n_days = [today_date - timedelta(days=i) for i in range(days - 1, -1, -1)]
         for day in last_n_days:
             day_total = (db.session.query(func.sum(Sale.total)).filter(func.date(Sale.created_at) == day).scalar() or 0)
             sales_by_period.append(day_total)
             labels.append(day.strftime('%b %d'))
-
+            
+    # --- Top Sellers (This is still all-time, which is usually OK) ---
     top_sellers = (
         db.session.query(
             Product.name,
@@ -153,19 +163,17 @@ def index():
         'index.html',
         products=products,
         low_stock=low_stock,
+        # --- Pass the new DYNAMIC totals ---
         total_sales=total_sales,
         total_purchases=total_purchases,
-        total_inventory_value=total_inventory_value,
-        # --- MODIFIED: Pass the new count to the template ---
-        products_in_stock=products_in_stock,
         net_income=net_income,
+        # --- Pass the STATIC (all-time) inventory values ---
+        total_inventory_value=total_inventory_value,
+        products_in_stock=products_in_stock,
+        # --- Pass the filter and chart data ---
         labels=labels,
         sales_by_day=sales_by_period,
         top_sellers=top_sellers,
-        sales_30d=sales_30d,
-        net_income_30d=net_income_30d,
-        sales_24h=sales_12h, 
-        net_income_24h=net_income_12h,
         current_period_filter=period,
         current_filter_label=current_filter_label
     )
@@ -249,10 +257,120 @@ def delete_product(sku):
     db.session.commit()
     return jsonify({'status': 'deleted'})
 
+# --- ADD THIS ENTIRE FUNCTION ---
+
+@core_bp.route('/inventory/bulk-add', methods=['GET', 'POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def inventory_bulk_add():
+    if request.method == 'POST':
+        if 'csv_file' not in request.files:
+            flash('No file part', 'danger')
+            return redirect(request.url)
+        
+        file = request.files['csv_file']
+        if file.filename == '':
+            flash('No selected file', 'danger')
+            return redirect(request.url)
+
+        if not file.filename.endswith('.csv'):
+            flash('Invalid file type. Please upload a .csv file.', 'danger')
+            return redirect(request.url)
+
+        try:
+            stream = io.StringIO(file.stream.read().decode("UTF-8"), newline=None)
+            csv_reader = csv.reader(stream)
+            
+            # Skip header row
+            next(csv_reader, None)
+            
+            products_added = 0
+            total_value = 0.0
+            errors = []
+            
+            for row in csv_reader:
+                if not row or len(row) < 5:
+                    continue # Skip empty/invalid rows
+
+                try:
+                    sku = row[0].strip()
+                    name = row[1].strip()
+                    sale_price = float(row[2] or 0.0)
+                    cost_price = float(row[3] or 0.0)
+                    quantity = int(row[4] or 0)
+                    
+                    if not sku or not name:
+                        errors.append(f"Skipped row (missing SKU or Name): {','.join(row)}")
+                        continue
+
+                    # Check for duplicate SKU
+                    existing_sku = Product.query.filter_by(sku=sku).first()
+                    if existing_sku:
+                        errors.append(f"SKU '{sku}' already exists. Skipped.")
+                        continue
+
+                    new_prod = Product(
+                        sku=sku,
+                        name=name,
+                        sale_price=sale_price,
+                        cost_price=cost_price,
+                        quantity=quantity
+                    )
+                    db.session.add(new_prod)
+                    db.session.flush()
+
+                    if quantity > 0 and cost_price > 0:
+                        initial_value = round(quantity * cost_price, 2)
+                        total_value += initial_value
+                        
+                        # 120: Inventory, 302: Opening Balance Equity
+                        je_lines = [
+                            {'account_code': '120', 'debit': initial_value, 'credit': 0},
+                            {'account_code': '302', 'debit': 0, 'credit': initial_value}
+                        ]
+                        je = JournalEntry(
+                            description=f'Beginning Balance for {new_prod.sku} ({new_prod.name})',
+                            entries_json=json.dumps(je_lines)
+                        )
+                        db.session.add(je)
+                    
+                    products_added += 1
+
+                except ValueError:
+                    db.session.rollback()
+                    errors.append(f"Invalid number format for row: {','.join(row)}. Skipped.")
+                except Exception as e:
+                    db.session.rollback()
+                    errors.append(f"Error on row {','.join(row)}: {str(e)}. Skipped.")
+
+            # --- Commit all good entries at the end ---
+            db.session.commit()
+            
+            flash(f'Successfully added {products_added} products.', 'success')
+            if total_value > 0:
+                flash(f'Recorded ₱{total_value:,.2f} in Beginning Inventory Value.', 'info')
+            if errors:
+                flash('Some rows were not imported:', 'warning')
+                for error in errors:
+                    flash(error, 'danger')
+            
+            log_action(f'Bulk-added {products_added} products with total beginning value of {total_value}.')
+            return redirect(url_for('core.inventory'))
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f'An error occurred processing the file: {str(e)}', 'danger')
+            return redirect(request.url)
+
+    # GET request just shows the template
+    # We must create this template file.
+    return render_template('inventory_bulk_add.html')
+
 
 @core_bp.route('/api/add_multiple_products', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant') # Good to protect this
 def api_add_multiple_products():
-    from models import Product # Ensure Product is imported
     data = request.json
     products_data = data.get('products', [])
     
@@ -260,31 +378,78 @@ def api_add_multiple_products():
         return jsonify({'error': 'No product data provided'}), 400
 
     new_product_count = 0
+    total_value = 0.0
+    errors = []
     
     try:
         for p_data in products_data:
             # Basic validation
-            if not p_data.get('sku') or not p_data.get('name'):
+            sku = p_data.get('sku')
+            name = p_data.get('name')
+            
+            if not sku or not name:
+                errors.append(f"Skipped row (missing SKU or Name): {sku}")
                 continue
             
             # Check if SKU already exists
-            if Product.query.filter_by(sku=p_data.get('sku')).first():
-                 # Skip or update, for simplicity we will skip here
+            if Product.query.filter_by(sku=sku).first():
+                 errors.append(f"SKU '{sku}' already exists. Skipped.")
                  continue 
-                 
-            new_prod = Product(
-                sku=p_data.get('sku'),
-                name=p_data.get('name'),
-                sale_price=float(p_data.get('sale_price') or 0),
-                cost_price=float(p_data.get('cost_price') or 0),
-                quantity=int(p_data.get('quantity') or 0)
-            )
-            db.session.add(new_prod)
-            new_product_count += 1
+            
+            try:
+                # Get data from payload
+                initial_cost = float(p_data.get('cost_price') or 0)
+                initial_qty = int(p_data.get('quantity') or 0)
+
+                new_prod = Product(
+                    sku=sku,
+                    name=name,
+                    sale_price=float(p_data.get('sale_price') or 0),
+                    cost_price=initial_cost,
+                    quantity=initial_qty
+                )
+                db.session.add(new_prod)
+                
+                # --- NEW: Create Beginning Balance Journal Entry ---
+                if initial_qty > 0 and initial_cost > 0:
+                    initial_value = round(initial_qty * initial_cost, 2)
+                    total_value += initial_value
+                    
+                    # 120: Inventory, 302: Opening Balance Equity
+                    je_lines = [
+                        {'account_code': '120', 'debit': initial_value, 'credit': 0},
+                        {'account_code': '302', 'debit': 0, 'credit': initial_value}
+                    ]
+                    je = JournalEntry(
+                        description=f'Beginning Balance for {new_prod.sku} ({new_prod.name})',
+                        entries_json=json.dumps(je_lines)
+                    )
+                    db.session.add(je)
+                # --- END OF NEW BLOCK ---
+                
+                new_product_count += 1
+            
+            except ValueError:
+                errors.append(f"Invalid number for SKU '{sku}'. Skipped.")
             
         db.session.commit()
+        
+        log_action(f'Bulk-added {new_product_count} products with total beginning value of {total_value}.')
+        
+        # Check if there were errors to report
+        if errors:
+             return jsonify({
+                'status': 'partial', 
+                'count': new_product_count,
+                'error': f'Added {new_product_count} products, but some failed. See errors.',
+                'errors': errors
+            }), 207 # 207 Multi-Status
+            
         return jsonify({'status': 'ok', 'count': new_product_count})
 
+    except exc.IntegrityError as e:
+        db.session.rollback()
+        return jsonify({'error': 'A database error occurred (e.g., duplicate SKU).', 'details': str(e)}), 500
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
