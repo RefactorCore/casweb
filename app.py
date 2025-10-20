@@ -92,6 +92,7 @@ def seed_essential_data(app):
         ('121', 'Creditable Withholding Tax', 'Asset'),
         ('201','Accounts Payable','Liability'),
         ('301','Capital','Equity'),
+        ('302', 'Opening Balance Equity', 'Equity'),
         ('401','Sales Revenue','Revenue'),
         ('402','Other Revenue','Revenue'),
         ('405', 'Sales Returns', 'Revenue'),
