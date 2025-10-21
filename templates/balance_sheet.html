@@ -9,6 +9,23 @@
         </a>
     </div>
 
+    <div class="card shadow-sm mb-3">
+      <div class="card-body">
+        <form method="GET" action="" class="row g-3 align-items-end">
+          <div class="col-md-4">
+            <label for="end_date" class="form-label">As of Date</label>
+            <input type="date" class="form-control" id="end_date" name="end_date" value="{{ end_date }}">
+          </div>
+          <div class="col-md-2">
+            <button type="submit" class="btn btn-primary w-100">Run Report</button>
+          </div>
+          <div class="col-md-2">
+            <a href="{{ request.path }}" class="btn btn-outline-secondary w-100">Clear</a>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div class="row">
         <div class="col-md-6 mb-4">
             <div class="card shadow-sm h-100">

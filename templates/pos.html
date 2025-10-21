@@ -269,7 +269,7 @@ function updateStockOnPage(cartItems) {
 // --- END OF NEW FUNCTION ---
 
 function generateReceipt(cart, total, cash, change) {
-  let text = "       🧾 SIMPLE POS RECEIPT\n";
+  let text = "       🧾 RECEIPT\n";
   text += "--------------------------------\n";
   cart.forEach(i => text += `${i.name}\n  ${i.qty} × ₱${i.price.toFixed(2)} = ₱${(i.qty*i.price).toFixed(2)}\n`);
   text += "--------------------------------\n";
