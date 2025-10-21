@@ -36,66 +36,109 @@ def aggregate_account_balances():
 @login_required
 @role_required('Admin', 'Accountant')
 def trial_balance():
-    agg = aggregate_account_balances()
+    # --- MODIFIED: Get dates from URL ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+    
+    # --- MODIFIED: Pass dates to the aggregator ---
+    agg = aggregate_account_balances(start_date, end_date)
+    
     tb = []
     total_debit = 0.0
     total_credit = 0.0
     
-    # --- MODIFIED: Loop through codes, then find the name ---
     for acc_code, val in agg.items():
-        # Find the account in the DB to get its name
         acc_details = Account.query.filter_by(code=acc_code).first()
         acc_name = acc_details.name if acc_details else f"Unknown ({acc_code})"
         
         if val >= 0:
-            # Pass both code and name to the template
             tb.append({'code': acc_code, 'name': acc_name, 'debit': val, 'credit': 0.0})
             total_debit += val
         else:
             tb.append({'code': acc_code, 'name': acc_name, 'debit': 0.0, 'credit': -val})
             total_credit += -val
             
-    # Sort by code for a standard Trial Balance view
     tb.sort(key=lambda x: x['code'])
     
-    return render_template('trial_balance.html', tb=tb, total_debit=total_debit, total_credit=total_credit)
+    # --- MODIFIED: Pass dates back to the template ---
+    return render_template('trial_balance.html', tb=tb, 
+                           total_debit=total_debit, total_credit=total_credit,
+                           start_date=start_date_str, end_date=end_date_str)
 
 
-# --- MODIFIED: Route now uses account_code ---
 @reports_bp.route('/ledger/<code>')
 @login_required
 @role_required('Admin', 'Accountant')
 def ledger(code):
-    # Get the account details from the code
     account = Account.query.filter_by(code=code).first_or_404()
+    
+    # --- MODIFIED: Get dates from URL ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+    
+    # --- MODIFIED: Filter the Journal Entry query by date ---
+    query = JournalEntry.query.order_by(JournalEntry.created_at)
+    if start_date:
+        query = query.filter(JournalEntry.created_at >= start_date)
+    if end_date:
+        end_date_inclusive = end_date + timedelta(days=1)
+        query = query.filter(JournalEntry.created_at < end_date_inclusive)
     
     rows = []
     balance = 0.0
-    for je in JournalEntry.query.order_by(JournalEntry.created_at).all():
+    
+    # --- MODIFIED: Get running balance *before* the start date (if one exists) ---
+    if start_date:
+        opening_balance_query = JournalEntry.query.filter(JournalEntry.created_at < start_date)
+        for je in opening_balance_query.all():
+            for line in je.entries():
+                if line.get('account_code') == code:
+                    debit = float(line.get('debit', 0) or 0)
+                    credit = float(line.get('credit', 0) or 0)
+                    balance += debit - credit
+        
+        # Add the opening balance as the first row
+        rows.append({'date': start_date, 'desc': 'Opening Balance', 'debit': 0, 'credit': 0, 'balance': balance})
+
+
+    # --- MODIFIED: Loop through the *filtered* query ---
+    for je in query.all():
         for line in je.entries():
-            # --- MODIFIED: Check for 'account_code' ---
             if line.get('account_code') == code:
                 debit = float(line.get('debit', 0) or 0)
                 credit = float(line.get('credit', 0) or 0)
                 balance += debit - credit
                 rows.append({'date': je.created_at, 'desc': je.description, 'debit': debit, 'credit': credit, 'balance': balance})
     
-    # Pass the full account object to the template
-    return render_template('ledger.html', account=account, rows=rows, balance=balance)
+    # --- MODIFIED: Pass dates back to the template ---
+    return render_template('ledger.html', account=account, rows=rows, 
+                           balance=balance, start_date=start_date_str, end_date=end_date_str)
 
 
 @reports_bp.route('/balance-sheet')
 @login_required
 @role_required('Admin', 'Accountant')
 def balance_sheet():
-    agg = aggregate_account_balances()
+    # --- MODIFIED: Balance Sheet is "As of" a date (end_date) ---
+    # Default to today if no date is provided
+    default_end_date = datetime.utcnow().strftime('%Y-%m-%d')
+    end_date_str = request.args.get('end_date', default_end_date)
+    end_date = parse_date(end_date_str)
+    
+    # --- MODIFIED: Pass only the end_date to the aggregator ---
+    # This gets all transactions from the beginning of time *up to* this date
+    agg = aggregate_account_balances(start_date=None, end_date=end_date)
+    
     assets, liabilities, equity = [], [], []
     
-    # --- MODIFIED: This logic is now much cleaner ---
     for acc_code, bal in agg.items():
         acct_rec = Account.query.filter_by(code=acc_code).first()
-        
-        # Skip if we can't find the account
         if not acct_rec:
             continue 
             
@@ -103,43 +146,49 @@ def balance_sheet():
         acc_type = acct_rec.type
 
         if acc_type == 'Asset':
-            # Assets have a normal Debit balance
             assets.append((acc_name, bal))
         elif acc_type == 'Liability':
-            # Liabilities have a normal Credit balance (bal will be negative)
             liabilities.append((acc_name, -bal))
         elif acc_type == 'Equity':
-            # Equity has a normal Credit balance (bal will be negative)
             equity.append((acc_name, -bal))
 
-    # --- ADDED: Calculate Net Income to make the Balance Sheet balance ---
-    # (This logic is copied from the new income_statement function below)
+    # --- MODIFIED: Calculate Net Income *up to the end_date* ---
     net_income = 0.0
-    revenues = {code: -bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Revenue').first()}
-    expenses = {code: bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Expense').first()}
+    # We re-call the aggregator just for Revenue/Expense accounts
+    is_agg = aggregate_account_balances(start_date=None, end_date=end_date)
+    revenues = {code: -bal for code, bal in is_agg.items() if Account.query.filter_by(code=code, type='Revenue').first()}
+    expenses = {code: bal for code, bal in is_agg.items() if Account.query.filter_by(code=code, type='Expense').first()}
+    
     total_revenue = sum(revenues.values())
     total_expense = sum(expenses.values())
     net_income = total_revenue - total_expense
     
-    # Add Net Income (as Retained Earnings) to Equity
     equity.append(("Current Period Net Income", net_income))
-    # --- End of Net Income block ---
 
     total_assets = sum(b for a, b in assets)
     total_liabilities = sum(b for a, b in liabilities)
     total_equity = sum(b for a, b in equity)
     
+    # --- MODIFIED: Pass the end_date back to the template ---
     return render_template('balance_sheet.html', assets=assets, liabilities=liabilities, equity=equity,
-                           total_assets=total_assets, total_liabilities=total_liabilities, total_equity=total_equity)
+                           total_assets=total_assets, total_liabilities=total_liabilities, total_equity=total_equity,
+                           end_date=end_date_str)
 
 
 @reports_bp.route('/income-statement')
 @login_required
 @role_required('Admin', 'Accountant')
 def income_statement():
-    agg = aggregate_account_balances()
+    # --- MODIFIED: Get dates from URL ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+
+    # --- MODIFIED: Pass dates to the aggregator ---
+    agg = aggregate_account_balances(start_date, end_date)
     
-    # --- MODIFIED: This now uses Account.type, which is robust ---
     revenues, expenses = {}, {}
 
     for acc_code, bal in agg.items():
@@ -151,23 +200,20 @@ def income_statement():
         acc_type = acct_rec.type
 
         if acc_type == 'Revenue':
-            # Revenues have a normal Credit balance (bal will be negative)
             revenues[acc_name] = -bal
         elif acc_type == 'Expense':
-            # Expenses have a normal Debit balance (bal will be positive)
             expenses[acc_name] = bal
 
     total_revenue = sum(revenues.values())
     total_expense = sum(expenses.values())
     net_income = total_revenue - total_expense
     
+    # --- MODIFIED: Pass dates back to the template ---
     return render_template('income_statement.html', revenues=revenues, expenses=expenses,
-                           total_revenue=total_revenue, total_expense=total_expense, net_income=net_income)
+                           total_revenue=total_revenue, total_expense=total_expense, net_income=net_income,
+                           start_date=start_date_str, end_date=end_date_str)
 
-#
-# --- All other routes (VAT, Sales, Purchases, etc.) remain the same ---
-# ... (keep all your other routes from vat_report() down to stock_card()) ...
-#
+
 @reports_bp.route('/vat-report')
 @login_required
 @role_required('Admin', 'Accountant')
@@ -576,6 +622,7 @@ def export_income_statement():
 def parse_date(date_str):
     """Helper to safely parse YYYY-MM-DD format strings."""
     try:
+        # --- FIX: Changed "%Y-%m-d" to "%Y-%m-%d" ---
         return datetime.strptime(date_str, "%Y-%m-%d")
     except (ValueError, TypeError):
         return None
@@ -664,3 +711,34 @@ def export_trial_balance():
     output.seek(0)
     filename = f"trial_balance_{datetime.now().strftime('%Y%m%d')}.csv"
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+    # --- MODIFIED: The core function now accepts dates ---
+def aggregate_account_balances(start_date=None, end_date=None):
+    """
+    Return dict: account_code -> balance (debit - credit) for a given date range.
+    """
+    agg = defaultdict(float)
+    
+    # --- MODIFIED: Create a base query ---
+    query = JournalEntry.query
+
+    # --- MODIFIED: Apply date filters if they exist ---
+    if start_date:
+        query = query.filter(JournalEntry.created_at >= start_date)
+    if end_date:
+        # Add one day to the end_date to make the filter inclusive
+        end_date_inclusive = end_date + timedelta(days=1)
+        query = query.filter(JournalEntry.created_at < end_date_inclusive)
+
+    # --- MODIFIED: Execute the filtered query ---
+    for je in query.all():
+        for line in je.entries():
+            acc_code = line.get('account_code') 
+            if not acc_code:
+                continue 
+                
+            debit = float(line.get('debit', 0) or 0)
+            credit = float(line.get('credit', 0) or 0)
+            agg[acc_code] += debit - credit
+    return dict(agg)
