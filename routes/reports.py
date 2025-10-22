@@ -13,24 +13,12 @@ import csv
 reports_bp = Blueprint('reports', __name__, url_prefix='/reports')
 
 
-def aggregate_account_balances():
-    """
-    Return dict: account_code -> balance (debit - credit).
-    This is the new core of all reporting.
-    """
-    agg = defaultdict(float)
-    for je in JournalEntry.query.all():
-        for line in je.entries():
-            # --- MODIFIED: Use 'account_code' instead of 'account' ---
-            acc_code = line.get('account_code') 
-            if not acc_code:
-                continue # Skip old/invalid entries
-                
-            debit = float(line.get('debit', 0) or 0)
-            credit = float(line.get('credit', 0) or 0)
-            agg[acc_code] += debit - credit
-    return dict(agg)
-
+def parse_date(date_str):
+    """Helper to safely parse YYYY-MM-DD format strings."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
 
 @reports_bp.route('/trial-balance')
 @login_required
@@ -514,7 +502,16 @@ def stock_card(product_id):
 @role_required('Admin', 'Accountant')
 def export_balance_sheet():
     """Exports the balance sheet to CSV."""
-    agg = aggregate_account_balances()
+    
+    # --- ADD THIS BLOCK TO READ THE DATE FILTER ---
+    # Balance Sheet is "As of" an end_date
+    default_end_date = datetime.utcnow().strftime('%Y-%m-%d')
+    end_date_str = request.args.get('end_date', default_end_date)
+    end_date = parse_date(end_date_str)
+    # --- END OF ADDED BLOCK ---
+
+    # --- MODIFIED: Pass the end_date to the aggregator ---
+    agg = aggregate_account_balances(start_date=None, end_date=end_date)
     assets, liabilities, equity = [], [], []
 
     # --- Re-run the balance_sheet logic ---
@@ -532,8 +529,12 @@ def export_balance_sheet():
         elif acc_type == 'Equity':
             equity.append((acc_name, -bal))
 
-    revenues = {code: -bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Revenue').first()}
-    expenses = {code: bal for code, bal in agg.items() if Account.query.filter_by(code=code, type='Expense').first()}
+    # --- MODIFIED: We must also filter the Net Income calculation ---
+    is_agg_net_income = aggregate_account_balances(start_date=None, end_date=end_date)
+    revenues = {code: -bal for code, bal in is_agg_net_income.items() if Account.query.filter_by(code=code, type='Revenue').first()}
+    expenses = {code: bal for code, bal in is_agg_net_income.items() if Account.query.filter_by(code=code, type='Expense').first()}
+    # --- END MODIFICATION ---
+
     total_revenue = sum(revenues.values())
     total_expense = sum(expenses.values())
     net_income = total_revenue - total_expense
@@ -549,6 +550,11 @@ def export_balance_sheet():
     output = io.StringIO()
     writer = csv.writer(output)
     
+    # --- MODIFIED: Add the "As of" date to the report ---
+    writer.writerow([f"Balance Sheet as of {end_date_str}", ""])
+    writer.writerow([])
+    # --- END MODIFICATION ---
+
     writer.writerow(["ASSETS", "Amount"])
     for name, balance in assets:
         writer.writerow([name, f"{balance:.2f}"])
@@ -570,7 +576,8 @@ def export_balance_sheet():
     writer.writerow(["TOTAL LIABILITIES & EQUITY", f"{total_liabilities_and_equity:.2f}"])
 
     output.seek(0)
-    filename = f"balance_sheet_{datetime.now().strftime('%Y%m%d')}.csv"
+    # --- MODIFIED: Include date in filename ---
+    filename = f"balance_sheet_as_of_{end_date_str}.csv"
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
@@ -579,7 +586,16 @@ def export_balance_sheet():
 @role_required('Admin', 'Accountant')
 def export_income_statement():
     """Exports the income statement to CSV."""
-    agg = aggregate_account_balances()
+    
+    # --- ADD THIS BLOCK TO READ DATE FILTERS ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+    # --- END OF ADDED BLOCK ---
+    
+    # --- MODIFIED: Pass dates to the aggregator ---
+    agg = aggregate_account_balances(start_date, end_date)
     
     # --- Re-run the income_statement logic ---
     revenues, expenses = {}, {}
@@ -600,6 +616,15 @@ def export_income_statement():
     output = io.StringIO()
     writer = csv.writer(output)
     
+    # --- MODIFIED: Add date range to report ---
+    date_range_label = f"For the period {start_date_str} to {end_date_str}"
+    if not start_date_str or not end_date_str:
+        date_range_label = "For All Time" # Fallback
+    writer.writerow(["Income Statement", ""])
+    writer.writerow([date_range_label, ""])
+    writer.writerow([])
+    # --- END MODIFICATION ---
+    
     writer.writerow(["REVENUES", "Amount"])
     for name, balance in revenues.items():
         writer.writerow([name, f"{balance:.2f}"])
@@ -619,13 +644,6 @@ def export_income_statement():
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
-def parse_date(date_str):
-    """Helper to safely parse YYYY-MM-DD format strings."""
-    try:
-        # --- FIX: Changed "%Y-%m-d" to "%Y-%m-%d" ---
-        return datetime.strptime(date_str, "%Y-%m-%d")
-    except (ValueError, TypeError):
-        return None
 
 @reports_bp.route('/export/vat-report')
 @login_required
@@ -674,13 +692,21 @@ def export_vat_report():
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
-# Add this function to the end of reports.py
 @reports_bp.route('/export/trial-balance')
 @login_required
 @role_required('Admin', 'Accountant')
 def export_trial_balance():
     """Exports the trial balance to CSV."""
-    agg = aggregate_account_balances()
+    
+    # --- ADD THIS BLOCK TO READ DATE FILTERS ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+    # --- END OF ADDED BLOCK ---
+
+    # --- MODIFIED: Pass dates to the aggregator ---
+    agg = aggregate_account_balances(start_date, end_date)
     
     # --- Re-run the trial_balance logic ---
     tb = []
@@ -701,6 +727,15 @@ def export_trial_balance():
     
     output = io.StringIO()
     writer = csv.writer(output)
+    
+    # --- MODIFIED: Add date range to report ---
+    date_range_label = f"For the period {start_date_str} to {end_date_str}"
+    if not start_date_str or not end_date_str:
+        date_range_label = "For All Time" # Fallback
+    writer.writerow(["Trial Balance", ""])
+    writer.writerow([date_range_label, "", ""])
+    writer.writerow([])
+    # --- END MODIFICATION ---
     
     writer.writerow(["Code", "Account Name", "Debit", "Credit"])
     for row in tb:
@@ -742,3 +777,6 @@ def aggregate_account_balances(start_date=None, end_date=None):
             credit = float(line.get('credit', 0) or 0)
             agg[acc_code] += debit - credit
     return dict(agg)
+
+
+
