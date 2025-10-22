@@ -4,7 +4,7 @@
     
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2 class="fw-bold text-primary mb-0">📈 Income Statement</h2>
-        <a href="{{ url_for('reports.export_income_statement') }}" class="btn btn-success">
+        <a href="{{ url_for('reports.export_income_statement', start_date=start_date, end_date=end_date) }}" class="btn btn-success">
             ⬇ Export CSV
         </a>
     </div>
