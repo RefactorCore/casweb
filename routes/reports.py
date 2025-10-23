@@ -206,38 +206,50 @@ def income_statement():
 @login_required
 @role_required('Admin', 'Accountant')
 def vat_report():
-    # --- This is the new, correct logic ---
     start_date_str = request.args.get('start_date')
     end_date_str = request.args.get('end_date')
 
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str)
 
+    # --- NEW: Query all four sources for VAT ---
     sale_query = Sale.query
+    ar_invoice_query = ARInvoice.query
     purchase_query = Purchase.query
+    ap_invoice_query = APInvoice.query
+    
+    end_date_inclusive = None
+    if end_date:
+        end_date_inclusive = end_date + timedelta(days=1)
 
     if start_date:
         sale_query = sale_query.filter(Sale.created_at >= start_date)
+        ar_invoice_query = ar_invoice_query.filter(ARInvoice.date >= start_date)
         purchase_query = purchase_query.filter(Purchase.created_at >= start_date)
-    if end_date:
-        # Add one day to end_date to make it inclusive
-        end_date_inclusive = end_date + timedelta(days=1)
+        ap_invoice_query = ap_invoice_query.filter(APInvoice.date >= start_date)
+    
+    if end_date_inclusive:
         sale_query = sale_query.filter(Sale.created_at < end_date_inclusive)
+        ar_invoice_query = ar_invoice_query.filter(ARInvoice.date < end_date_inclusive)
         purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
+        ap_invoice_query = ap_invoice_query.filter(APInvoice.date < end_date_inclusive)
 
-    # Use .all() here to get the data
-    sales = sale_query.all()
-    purchases = purchase_query.all()
+    # --- NEW: Sum VAT from all relevant tables ---
+    sales_vat = sum(s.vat or 0 for s in sale_query.all())
+    ar_invoice_vat = sum(ar.vat or 0 for ar in ar_invoice_query.all())
+    total_output_vat = sales_vat + ar_invoice_vat
 
-    sale_vat = sum(s.vat or 0 for s in sales)
-    purchase_vat = sum(p.vat or 0 for p in purchases)
-    vat_payable = sale_vat - purchase_vat
+    purchases_vat = sum(p.vat or 0 for p in purchase_query.all())
+    ap_invoice_vat = sum(ap.vat or 0 for ap in ap_invoice_query.all())
+    total_input_vat = purchases_vat + ap_invoice_vat
 
-    # --- This now passes the correct variables to the template ---
+    vat_payable = total_output_vat - total_input_vat
+    # --- END OF NEW LOGIC ---
+
     return render_template(
         'vat_report.html',
-        sale_vat=sale_vat,
-        purchase_vat=purchase_vat,
+        total_output_vat=total_output_vat, # <-- Renamed
+        total_input_vat=total_input_vat,   # <-- Renamed
         vat_payable=vat_payable,
         start_date=start_date_str,
         end_date=end_date_str
@@ -653,34 +665,45 @@ def export_vat_report():
     start_date = parse_date(request.args.get("start_date"))
     end_date = parse_date(request.args.get("end_date"))
 
-    # --- Re-run the vat_report logic ---
+    # --- NEW: Re-run the new vat_report logic ---
     sale_query = Sale.query
+    ar_invoice_query = ARInvoice.query
     purchase_query = Purchase.query
+    ap_invoice_query = APInvoice.query
+    
+    end_date_inclusive = None
+    if end_date:
+        end_date_inclusive = end_date + timedelta(days=1)
 
     if start_date:
         sale_query = sale_query.filter(Sale.created_at >= start_date)
+        ar_invoice_query = ar_invoice_query.filter(ARInvoice.date >= start_date)
         purchase_query = purchase_query.filter(Purchase.created_at >= start_date)
-    if end_date:
-        # Add one day to end_date to make it inclusive
-        end_date_inclusive = end_date + timedelta(days=1)
+        ap_invoice_query = ap_invoice_query.filter(APInvoice.date >= start_date)
+    
+    if end_date_inclusive:
         sale_query = sale_query.filter(Sale.created_at < end_date_inclusive)
+        ar_invoice_query = ar_invoice_query.filter(ARInvoice.date < end_date_inclusive)
         purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
+        ap_invoice_query = ap_invoice_query.filter(APInvoice.date < end_date_inclusive)
 
-    # Use .all() here to get the data
-    sales = sale_query.all()
-    purchases = purchase_query.all()
+    sales_vat = sum(s.vat or 0 for s in sale_query.all())
+    ar_invoice_vat = sum(ar.vat or 0 for ar in ar_invoice_query.all())
+    total_output_vat = sales_vat + ar_invoice_vat
 
-    sale_vat = sum(s.vat or 0 for s in sales)
-    purchase_vat = sum(p.vat or 0 for p in purchases)
-    vat_payable = sale_vat - purchase_vat
+    purchases_vat = sum(p.vat or 0 for p in purchase_query.all())
+    ap_invoice_vat = sum(ap.vat or 0 for ap in ap_invoice_query.all())
+    total_input_vat = purchases_vat + ap_invoice_vat
+
+    vat_payable = total_output_vat - total_input_vat
     # --- End of logic ---
 
     output = io.StringIO()
     writer = csv.writer(output)
 
     writer.writerow(["Type", "Amount (₱)"])
-    writer.writerow(["Input VAT (from Purchases)", f"{purchase_vat:.2f}"])
-    writer.writerow(["Output VAT (from Sales)", f"{sale_vat:.2f}"])
+    writer.writerow(["Total Input VAT (from all purchases)", f"{total_input_vat:.2f}"])
+    writer.writerow(["Total Output VAT (from all sales)", f"{total_output_vat:.2f}"])
 
     if vat_payable >= 0:
         writer.writerow(["VAT Payable", f"{vat_payable:.2f}"])

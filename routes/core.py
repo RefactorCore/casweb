@@ -649,16 +649,18 @@ def api_sale():
                 db.session.rollback()
                 return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
-            line_net = qty * product.sale_price
-            vat = round(line_net * VAT_RATE, 2)
-            line_total = line_net + vat
+            line_total = qty * product.sale_price 
+            line_net = round(line_total / (1 + VAT_RATE), 2)
+            vat = round(line_total - line_net, 2)
             cogs = qty * product.cost_price
 
             db.session.add(SaleItem(
                 sale_id=sale.id, product_id=product.id,
                 product_name=product.name, sku=sku,
-                qty=qty, unit_price=product.sale_price,
-                line_total=line_total, cogs=cogs
+                qty=qty, 
+                unit_price=product.sale_price, # Store the inclusive price
+                line_total=line_total, # Store the inclusive total
+                cogs=cogs
             ))
 
             product.quantity -= qty
