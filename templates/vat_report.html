@@ -35,12 +35,12 @@
         </thead>
         <tbody>
           <tr>
-            <td>Input VAT (from Purchases)</td>
-            <td class="text-end text-danger">{{ purchase_vat | money }}</td>
+            <td>Total Input VAT (from all purchases)</td>
+            <td class="text-end text-danger">{{ total_input_vat | money }}</td>
           </tr>
           <tr>
-            <td>Output VAT (from Sales)</td>
-            <td class="text-end text-success">{{ sale_vat | money }}</td>
+            <td>Total Output VAT (from all sales)</td>
+            <td class="text-end text-success">{{ total_output_vat | money }}</td>
           </tr>
           <tr class="fw-bold table-secondary">
             <td>VAT Payable / (Refund)</td>

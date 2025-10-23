@@ -83,8 +83,7 @@
   </div>
 
   <div class="pos-body">
-    <!-- Left: Products -->
-   <div class="pos-products">
+    <div class="pos-products">
   <form id="posSearchForm" method="GET" action="{{ url_for('core.pos') }}" class="mb-3">
     <div class="d-flex justify-content-between align-items-center mb-2">
       <h5>Products</h5>
@@ -100,7 +99,7 @@
   <div id="productGrid" class="row row-cols-2 row-cols-md-3 g-2">
     {% for p in products %}
     <div class="col product-col">
-      <div class="product-card" data-sku="{{ p.sku }}" data-name="{{ p.name }}" data-price="{{ p.sale_price }}">
+      <div class="product-card" data-sku="{{ p.sku }}" data-name="{{ p.name }}" data-price="{{ p.sale_price }}" data-stock="{{ p.quantity }}">
         <strong>{{ p.name }}</strong><br>
         <small>{{ p.sku }}</small><br>
         <span class="badge bg-success">₱{{ "%.2f"|format(p.sale_price) }}</span>
@@ -113,7 +112,6 @@
   {% include '_pagination.html' %}
 </div>
 
-    <!-- Right: Cart -->
     <div class="pos-cart">
       <h5><i class="bi bi-receipt me-1"></i>Current Sale</h5>
       <div class="cart-list" id="cartList"></div>
@@ -127,24 +125,70 @@
   </div>
 </div>
 
-<!-- Calculator Modal -->
-<div class="modal fade" id="calcModal" tabindex="-1">
+<div class="modal fade" id="qtyModal" tabindex="-1">
   <div class="modal-dialog modal-sm modal-dialog-centered">
-    <div class="modal-content p-3">
-      <h5 class="text-center">Enter Cash</h5>
-      <input type="text" id="cashInput" class="form-control text-end mb-2" readonly>
-      <div class="d-flex flex-wrap justify-content-center">
-        {% for n in [7,8,9,4,5,6,1,2,3,0] %}
-          <button class="btn btn-outline-primary calc-btn" onclick="press('{{n}}')">{{n}}</button>
-        {% endfor %}
-        <button class="btn btn-outline-secondary calc-btn" onclick="press('C')">C</button>
-        <button class="btn btn-success calc-btn" onclick="finishCheckout()">OK</button>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="qtyModalLabel">Enter Quantity</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label for="qtyInput" class="form-label">Quantity:</label>
+        <input type="number" class="form-control" id="qtyInput" value="1" min="0">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="saveQtyBtn">Add to Cart</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Receipt Modal -->
+<div class="modal fade" id="calcModal" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content shadow-lg border-0" style="border-radius: 1rem;">
+      <div class="modal-body p-4">
+        
+        <h5 class="text-center text-primary fw-bold mb-3">Enter Cash Tendered</h5>
+        
+        <input type="text" id="cashInput" class="form-control form-control-lg text-end fs-3 mb-3" readonly placeholder="0.00">
+        
+        <div class="container-fluid p-0">
+          <div class="row g-2">
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('7')">7</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('8')">8</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('9')">9</button></div>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('4')">4</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('5')">5</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('6')">6</button></div>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('1')">1</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('2')">2</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('3')">3</button></div>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col-4"><button class="btn btn-lg btn-outline-warning w-100 py-3" onclick="press('C')">C</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('0')">0</button></div>
+            <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('.')">.</button></div>
+          </div>
+          
+          <div class="row g-2 mt-3">
+             <div class="col-12">
+               <button class="btn btn-lg btn-success w-100 py-3" onclick="finishCheckout()">
+                 <i class="bi bi-check-lg"></i> OK
+               </button>
+             </div>
+          </div>
+          
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal fade" id="receiptModal" tabindex="-1">
   <div class="modal-dialog modal-sm modal-dialog-centered">
     <div class="modal-content p-3">
@@ -156,129 +200,190 @@
 </div>
 
 <script>
-let cart = [];
-let cashTendered = 0;
+// --- REFACTOR: Wrap all JS in a DOMContentLoaded event listener ---
+document.addEventListener("DOMContentLoaded", function() {
 
-function renderCart() {
-  const list = document.getElementById('cartList');
-  list.innerHTML = '';
-  let total = 0;
-  cart.forEach((item, i) => {
-    total += item.price * item.qty;
-    list.innerHTML += `
-      <div class="d-flex justify-content-between align-items-center border-bottom py-1">
-        <div>
-          <strong>${item.name}</strong><br>
-          <small>${item.qty} × ₱${item.price.toFixed(2)}</small>
-        </div>
-        <button class="btn btn-sm btn-outline-danger" onclick="removeItem(${i})">
-          <i class="bi bi-trash"></i>
-        </button>
-      </div>`;
-  });
-  document.getElementById('total').innerText = total.toFixed(2);
-}
-
-function removeItem(i) {
-  cart.splice(i, 1);
-  renderCart();
-}
-
-document.querySelectorAll('.product-card').forEach(el => {
-  el.addEventListener('click', () => {
-    const sku = el.dataset.sku;
-    const name = el.dataset.name;
-    const price = parseFloat(el.dataset.price);
-    const existing = cart.find(i => i.sku === sku);
-    if (existing) existing.qty++;
-    else cart.push({ sku, name, price, qty: 1 });
-    renderCart();
-  });
-});
-
-
-// --- Calculator Logic ---
-function press(val) {
-  const inp = document.getElementById('cashInput');
-  if (val === 'C') inp.value = '';
-  else inp.value += val;
-}
-
-document.getElementById('checkoutBtn').addEventListener('click', () => {
-  if (cart.length === 0) return alert('No items in cart.');
-  const modal = new bootstrap.Modal(document.getElementById('calcModal'));
-  modal.show();
-});
-
-async function finishCheckout() {
-  const total = parseFloat(document.getElementById('total').innerText);
-  const cash = parseFloat(document.getElementById('cashInput').value || 0);
-  if (isNaN(cash) || cash < total) {
-    alert('Insufficient cash.');
+  let cart = [];
+  let cashTendered = 0;
+  // --- Get a reference to the quantity modal
+  const qtyModalEl = document.getElementById('qtyModal');
+  if (!qtyModalEl) {
+    console.error("Quantity modal element not found!");
     return;
   }
+  const qtyModal = new bootstrap.Modal(qtyModalEl);
 
-  const response = await fetch('/api/sale', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items: cart })
+  function renderCart() {
+    const list = document.getElementById('cartList');
+    list.innerHTML = '';
+    let total = 0;
+    cart.forEach((item, i) => {
+      total += item.price * item.qty;
+      list.innerHTML += `
+        <div class="d-flex justify-content-between align-items-center border-bottom py-1">
+          <div>
+            <strong>${item.name}</strong><br>
+            <small>${item.qty} × ₱${item.price.toFixed(2)}</small>
+          </div>
+          <button class="btn btn-sm btn-outline-danger" onclick="removeItem(${i})">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>`;
+    });
+    document.getElementById('total').innerText = total.toFixed(2);
+  }
+
+  // Make this function global so the inline onclick can find it
+  window.removeItem = function(i) {
+    cart.splice(i, 1);
+    renderCart();
+  }
+
+  // --- Product card click listener
+  document.querySelectorAll('.product-card').forEach(el => {
+    el.addEventListener('click', () => {
+      const sku = el.dataset.sku;
+      const name = el.dataset.name;
+      const price = parseFloat(el.dataset.price);
+      const stock = parseInt(el.dataset.stock, 10);
+      
+      const existing = cart.find(i => i.sku === sku);
+      const currentQtyInCart = existing ? existing.qty : 0;
+
+      // Set up the modal
+      document.getElementById('qtyModalLabel').innerText = name;
+      const qtyInput = document.getElementById('qtyInput');
+      qtyInput.value = existing ? existing.qty : 1; // Show current cart qty or default to 1
+      qtyInput.max = stock; // Set max stock
+      
+      // Store product info on the save button
+      const saveBtn = document.getElementById('saveQtyBtn');
+      saveBtn.dataset.sku = sku;
+      saveBtn.dataset.name = name;
+      saveBtn.dataset.price = price;
+      saveBtn.dataset.stock = stock;
+      
+      // Show the modal
+      qtyModal.show();
+    });
   });
 
-  const data = await response.json();
-  if (data.status === 'ok') {
-    const change = cash - total;
-    const receipt = generateReceipt(cart, total, cash, change);
-    document.getElementById('receiptText').innerText = receipt;
-    new bootstrap.Modal(document.getElementById('receiptModal')).show();
+  // --- Click listener for the modal's save button
+  document.getElementById('saveQtyBtn').addEventListener('click', function() {
+    const newQty = parseInt(document.getElementById('qtyInput').value, 10);
+    const sku = this.dataset.sku;
+    const name = this.dataset.name;
+    const price = parseFloat(this.dataset.price);
+    const stock = parseInt(this.dataset.stock, 10);
     
-    // --- THIS IS THE NEW LINE ---
-    updateStockOnPage(cart); 
-    // --- END OF NEW LINE ---
+    if (isNaN(newQty)) {
+      alert('Please enter a valid number.');
+      return;
+    }
+    
+    if (newQty > stock) {
+      alert(`Not enough stock. Only ${stock} available.`);
+      return;
+    }
 
-    cart = [];
+    const existingIndex = cart.findIndex(i => i.sku === sku);
+
+    if (newQty > 0) {
+      if (existingIndex > -1) {
+        cart[existingIndex].qty = newQty; // Update existing quantity
+      } else {
+        cart.push({ sku, name, price, qty: newQty }); // Add as new item
+      }
+    } else {
+      // If user enters 0 or less, remove the item
+      if (existingIndex > -1) {
+        window.removeItem(existingIndex); // Use the global remove function
+      }
+    }
+    
     renderCart();
-    document.getElementById('cashInput').value = '';
-    bootstrap.Modal.getInstance(document.getElementById('calcModal')).hide();
-  } else {
-    alert(data.error || 'Error during checkout.');
-  }
-}
+    qtyModal.hide();
+  });
 
-// --- THIS IS THE NEW FUNCTION ---
-function updateStockOnPage(cartItems) {
-  for (const item of cartItems) {
-    // Find the product card on the page using the data-sku
-    const productCard = document.querySelector(`.product-card[data-sku="${item.sku}"]`);
-    if (productCard) {
-      // Find the quantity span inside that card
-      const qtySpan = productCard.querySelector('.product-quantity');
-      if (qtySpan) {
-        // Get the current quantity from the text
-        const currentQtyText = qtySpan.textContent.replace('Stock: ', '');
-        let currentQty = parseInt(currentQtyText, 10);
-        
-        // Calculate and update the new quantity
-        if (!isNaN(currentQty)) {
-          let newQty = currentQty - item.qty;
-          qtySpan.textContent = `Stock: ${newQty}`;
+
+  // --- Calculator Logic ---
+  // Make these functions global so inline onclicks can find them
+  window.press = function(val) {
+    const inp = document.getElementById('cashInput');
+    if (val === 'C') inp.value = '';
+    else inp.value += val;
+  }
+
+  document.getElementById('checkoutBtn').addEventListener('click', () => {
+    if (cart.length === 0) return alert('No items in cart.');
+    const modal = new bootstrap.Modal(document.getElementById('calcModal'));
+    modal.show();
+  });
+
+  window.finishCheckout = async function() {
+    const total = parseFloat(document.getElementById('total').innerText);
+    const cash = parseFloat(document.getElementById('cashInput').value || 0);
+    if (isNaN(cash) || cash < total) {
+      alert('Insufficient cash.');
+      return;
+    }
+
+    const response = await fetch('/api/sale', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: cart, doc_type: 'OR' }) 
+    });
+
+    const data = await response.json();
+    if (data.status === 'ok') {
+      const change = cash - total;
+      const receipt = generateReceipt(cart, total, cash, change, data.receipt_number);
+      document.getElementById('receiptText').innerText = receipt;
+      new bootstrap.Modal(document.getElementById('receiptModal')).show();
+      
+      updateStockOnPage(cart); 
+      
+      cart = [];
+      renderCart();
+      document.getElementById('cashInput').value = '';
+      bootstrap.Modal.getInstance(document.getElementById('calcModal')).hide();
+    } else {
+      alert(data.error || 'Error during checkout.');
+    }
+  }
+
+  function updateStockOnPage(cartItems) {
+    for (const item of cartItems) {
+      const productCard = document.querySelector(`.product-card[data-sku="${item.sku}"]`);
+      if (productCard) {
+        const qtySpan = productCard.querySelector('.product-quantity');
+        if (qtySpan) {
+          const currentQtyText = qtySpan.textContent.replace('Stock: ', '');
+          let currentQty = parseInt(currentQtyText, 10);
+          
+          if (!isNaN(currentQty)) {
+            let newQty = currentQty - item.qty;
+            qtySpan.textContent = `Stock: ${newQty}`;
+            productCard.dataset.stock = newQty;
+          }
         }
       }
     }
   }
-}
-// --- END OF NEW FUNCTION ---
 
-function generateReceipt(cart, total, cash, change) {
-  let text = "       🧾 RECEIPT\n";
-  text += "--------------------------------\n";
-  cart.forEach(i => text += `${i.name}\n  ${i.qty} × ₱${i.price.toFixed(2)} = ₱${(i.qty*i.price).toFixed(2)}\n`);
-  text += "--------------------------------\n";
-  text += `TOTAL: ₱${total.toFixed(2)}\n`;
-  text += `CASH:  ₱${cash.toFixed(2)}\n`;
-  text += `CHANGE: ₱${change.toFixed(2)}\n`;
-  text += "--------------------------------\n";
-  text += "Thank you for shopping!\n";
-  return text;
-}
+  function generateReceipt(cart, total, cash, change, receiptNumber) {
+    let text = `     🧾 RECEIPT ${receiptNumber || ''}\n`;
+    text += "--------------------------------\n";
+    cart.forEach(i => text += `${i.name}\n  ${i.qty} × ₱${i.price.toFixed(2)} = ₱${(i.qty*i.price).toFixed(2)}\n`);
+    text += "--------------------------------\n";
+    text += `TOTAL: ₱${total.toFixed(2)}\n`;
+    text += `CASH:  ₱${cash.toFixed(2)}\n`;
+    text += `CHANGE: ₱${change.toFixed(2)}\n`;
+    text += "--------------------------------\n";
+    text += "Thank you for shopping!\n";
+    return text;
+  }
+
+}); // --- END of DOMContentLoaded wrapper ---
 </script>
 {% endblock %}
