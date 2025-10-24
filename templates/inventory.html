@@ -8,53 +8,55 @@
     margin-bottom: 1rem;
   }
   .low-stock {
-    background-color: #fff3cd !important;
+    background-color: #fff3cd !important; /* Yellowish for low stock */
   }
-  .badge-low {
-    background-color: #dc3545;
-  }
-  .badge-ok {
-    background-color: #28a745;
+  
+  /* NEW: Style for disabled (inactive) rows */
+  .disabled-row {
+    background-color: #f8f9fa !important;
+    text-decoration: line-through;
+    color: #6c757d;
   }
 </style>
 
 <div class="container-fluid mt-3">
   <div class="page-header">
-  <h2><i class="bi bi-box-seam me-2"></i>Inventory</h2>
+    <h2><i class="bi bi-box-seam me-2"></i>Inventory</h2>
 
-  <div>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProductModal">
-      <i class="bi bi-plus-circle me-1"></i> Add Product
-    </button>
-
-    <a href="{{ url_for('core.inventory_bulk_add') }}" class="btn btn-success ms-2">
-    <i class="bi bi-upload me-1"></i> Bulk Add (CSV)
-    </a>
-
-    <button class="btn btn-warning ms-2" data-bs-toggle="modal" data-bs-target="#adjustStockModal">
-      <i class="bi bi-arrow-down-up me-1"></i> Adjust Stock
-    </button>
-  </div>
-</div>
-
-  <div class="card mb-3">
-  <div class="card-body d-flex justify-content-between align-items-center">
-    
-    <form method="GET" action="{{ url_for('core.inventory') }}" class="d-flex align-items-center">
-      <div class="input-group" style="max-width: 300px;">
-        <input type="text" name="search" value="{{ search or '' }}" class="form-control" placeholder="Search by SKU or Name...">
-        <button type="submit" class="btn btn-primary">
-          <i class="bi bi-search"></i>
-        </button>
-      </div>
-    </form>
-    
     <div>
-      <span class="badge bg-success">In Stock</span>
-      <span class="badge bg-danger">Low Stock (≤5)</span>
+      <!-- <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProductModal">
+        <i class="bi bi-plus-circle me-1"></i> Add Product
+      </button> -->
+
+      <a href="{{ url_for('core.inventory_bulk_add') }}" class="btn btn-success ms-2">
+      <i class="bi bi-upload me-1"></i> Bulk Add (CSV)
+      </a>
+
+      <button class="btn btn-warning ms-2" data-bs-toggle="modal" data-bs-target="#adjustStockModal">
+        <i class="bi bi-arrow-down-up me-1"></i> Adjust Stock
+      </button>
     </div>
   </div>
-</div>
+
+  <div class="card mb-3">
+    <div class="card-body d-flex justify-content-between align-items-center">
+      
+      <form method="GET" action="{{ url_for('core.inventory') }}" class="d-flex align-items-center">
+        <div class="input-group" style="max-width: 300px;">
+          <input type="text" name="search" value="{{ search or '' }}" class="form-control" placeholder="Search by SKU or Name...">
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-search"></i>
+          </button>
+        </div>
+      </form>
+      
+      <div>
+        <span class="badge bg-success">In Stock</span>
+        <span class="badge bg-warning">Low Stock (≤5)</span>
+        <span class="badge bg-danger">Disabled</span>
+      </div>
+    </div>
+  </div>
 
 
   <div class="card">
@@ -74,17 +76,19 @@
           </thead>
           <tbody>
             {% for p in products %}
-            <tr class="{% if p.quantity <= 5 %}low-stock{% endif %}">
+            <tr class="{% if not p.is_active %}disabled-row{% elif p.quantity <= 5 %}low-stock{% endif %}">
               <td>{{ p.sku }}</td>
               <td>{{ p.name }}</td>
               <td>₱{{ "%.2f"|format(p.sale_price) }}</td>
               <td>₱{{ "%.2f"|format(p.cost_price) }}</td>
               <td>{{ p.quantity }}</td>
               <td>
-                {% if p.quantity <= 5 %}
-                  <span class="badge badge-low">Low Stock</span>
+                {% if not p.is_active %}
+                  <span class="badge bg-danger">Disabled</span>
+                {% elif p.quantity <= 5 %}
+                  <span class="badge bg-warning">Low Stock</span>
                 {% else %}
-                  <span class="badge badge-ok">In Stock</span>
+                  <span class="badge bg-success">In Stock</span>
                 {% endif %}
               </td>
               <td>
@@ -95,9 +99,18 @@
                           onclick='editProduct({{ p.sku|tojson }}, {{ p.name|tojson }}, {{ p.sale_price }}, {{ p.cost_price }})'>
                   <i class="bi bi-pencil"></i>
                 </button>
-<!--                 <button class="btn btn-sm btn-outline-danger" onclick="deleteProduct('{{ p.sku }}')">
-                  <i class="bi bi-trash"></i>
-                </button> -->
+                
+                {% if p.is_active %}
+                  <button class="btn btn-sm btn-outline-danger" 
+                          onclick="toggleStatus({{ p.id }}, '{{ p.name }}')"
+                          title="Disable Product">
+                    <i class="bi bi-x-circle"></i> </button>
+                {% else %}
+                  <button class="btn btn-sm btn-outline-success" 
+                          onclick="toggleStatus({{ p.id }}, '{{ p.name }}')"
+                          title="Enable Product">
+                    <i class="bi bi-check-circle"></i> </button>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -120,8 +133,8 @@
           <div class="mb-3">
             <label class="form-label">Product</label>
             <select name="product_id" class="form-select" required>
-              <option value="">-- Select a Product --</option>
-              {% for p in products %}
+              <option value="">-- Select an Active Product --</option>
+              {% for p in all_active_products %}
                 <option value="{{ p.id }}">{{ p.name }} (Current: {{ p.quantity }})</option>
               {% endfor %}
             </select>
@@ -213,9 +226,11 @@
   </div>
 </div>
 
-<script>
 
-  // Function to add a new row to the table
+
+<script>
+  // addRow() and submitMultipleProducts() functions remain the same
+  // ...
   function addRow() {
       const tbody = document.getElementById('multiProductTable').querySelector('tbody');
       const newRow = tbody.insertRow();
@@ -229,8 +244,6 @@
           <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">-</button></td>
       `;
   }
-
-  // Function to collect data and submit via AJAX
   async function submitMultipleProducts() {
       const table = document.getElementById('multiProductTable');
       const rows = table.querySelector('tbody').rows;
@@ -243,13 +256,11 @@
           
           inputs.forEach(input => {
               product[input.name] = input.value;
-              // Basic validation check
               if (input.required && !input.value) {
                   isValid = false;
               }
           });
 
-          // Only push rows that actually have an SKU and Name
           if (product.sku && product.name) {
                products.push(product);
           }
@@ -265,7 +276,6 @@
            return;
       }
 
-      // Submit the data to the new API endpoint
       const response = await fetch('/api/add_multiple_products', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -276,46 +286,70 @@
 
       if (data.status === 'ok') {
           alert('Successfully added ' + data.count + ' products.');
-          new bootstrap.Modal(document.getElementById('addProductModal')).hide(); // Hide the modal
+          new bootstrap.Modal(document.getElementById('addProductModal')).hide(); 
           location.reload();
       } else {
-          alert('Error adding products: ' (data.error || 'Unknown error'));
+          // MODIFIED: Corrected alert syntax
+          alert('Error adding products: ' + (data.error || 'Unknown error'));
       }
   }
 
-  // Ensure at least one row exists when the modal is opened
+  // DOMContentLoaded logic remains the same
+  // ...
   document.addEventListener('DOMContentLoaded', () => {
       const modal = document.getElementById('addProductModal');
       if (modal) {
           modal.addEventListener('show.bs.modal', () => {
               const tbody = document.getElementById('multiProductTable').querySelector('tbody');
-              // Clear previous rows and add one fresh row
               tbody.innerHTML = '';
               addRow(); 
           });
       }
   });
 
-  // MODIFIED: 'qty' parameter is removed from the function definition
+
+  // editProduct function remains the same
+  // ...
   function editProduct(sku, name, sale, cost) {
     document.getElementById('editSKU').value = sku;
     document.getElementById('editName').value = name;
     document.getElementById('editSale').value = sale;
     document.getElementById('editCost').value = cost;
-    // MODIFIED: The line that set the quantity has been removed
     new bootstrap.Modal(document.getElementById('editProductModal')).show();
   }
 
-  // 🗑️ Delete Product
-  function deleteProduct(sku) {
-    if (confirm(`Delete product ${sku}?`)) {
-      fetch(`/delete_product/${sku}`, { method: 'POST' })
-        .then(res => res.json())
-        .then(data => location.reload())
-        .catch(() => alert('Failed to delete.'));
+
+  // --- REMOVED old deleteProduct(sku) function ---
+
+  
+  // --- ADDED new toggleStatus function ---
+  function toggleStatus(productId, productName) {
+    // We ask for confirmation
+    const action = confirm(`Are you sure you want to change the status for "${productName}"?`);
+    
+    if (action) {
+      // We call the new backend route
+      fetch(`/product/toggle-status/${productId}`, { 
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'ok') {
+          location.reload(); // Simple reload to show all changes
+        } else {
+          alert('Failed to update product status.');
+        }
+      })
+      .catch((error) => {
+        console.error('Error:', error);
+        alert('An error occurred while toggling the status.');
+      });
     }
   }
-
 </script>
+
 {% include "_pagination.html" %}
 {% endblock %}
