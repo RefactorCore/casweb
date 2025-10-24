@@ -10,10 +10,10 @@
     <div class="row mb-3">
       <div class="col-md-6">
         <label class="form-label fw-semibold">Supplier</label>
-        <input id="supplier" name="supplier" class="form-control" placeholder="Search or type supplier..." list="supplier-list" required>
+        <input id="supplier" name="supplier" class="form-control" placeholder="Search or type new supplier..." list="supplier-list" required>
         <datalist id="supplier-list">
           {% for s in suppliers %}
-            <option value="{{ s }}"></option>
+            <option value="{{ s.name }}"></option>
           {% endfor %}
         </datalist>
       </div>
@@ -30,27 +30,38 @@
 
     <div class="row g-2 align-items-end">
       <div class="col-md-5">
-        <label class="form-label">Product</label>
+        <label class="form-label">Product Quick Select</label>
         <select id="product-select" class="form-select">
-          <option value="">-- select product --</option>
+          <option value="">-- select existing product to auto-fill --</option>
           {% for p in products %}
-            <option value="{{ p.sku }}" data-name="{{ p.name }}">{{ p.sku }} - {{ p.name }}</option>
+            <option value="{{ p.sku }}" data-name="{{ p.name }}" data-cost="{{ p.cost_price }}">{{ p.sku }} - {{ p.name }}</option>
           {% endfor %}
         </select>
+      </div>
+    </div>
+    
+    <div class="row g-2 align-items-end mt-2">
+      <div class="col-md-3">
+        <label class="form-label">SKU</label>
+        <input id="p-sku" type="text" class="form-control" placeholder="Type new or existing SKU"  />
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Product Name</label>
+        <input id="p-name" type="text" class="form-control" placeholder="Type new or existing name"  />
       </div>
       <div class="col-md-2">
         <label class="form-label">Qty</label>
         <input id="p-qty" type="number" value="1" min="1" class="form-control" />
       </div>
-      <div class="col-md-3">
-        <label class="form-label">Unit Cost</label>
-        <input id="p-unit" type="number" step="0.01" value="0" class="form-control" />
-      </div>
       <div class="col-md-2">
-        <button id="add-p" class="btn btn-primary w-100">➕ Add Item</button>
+        <label class="form-label">Unit Cost</label>
+        <input id="p-unit" type="number" step="0.01" value="0.00" class="form-control" />
+      </div>
+      <div class="col-md-1">
+        <label class="form-label">&nbsp;</label>
+        <button id="add-p" class="btn btn-primary w-100">➕ Add</button>
       </div>
     </div>
-
     <hr class="my-4">
 
     <h5 class="fw-bold">Items</h5>
@@ -70,7 +81,6 @@
     </div>
 
     <input type="hidden" name="items_json" id="items_json" />
-    <input type="hidden" name="supplier_input" id="supplier_input" />
   </form>
 </div>
 
@@ -78,6 +88,7 @@
 const VAT_RATE = 0.12;
 let items = [];
 
+// This render function is still perfect, no changes needed.
 function render() {
   const tbody = document.querySelector('#p-items tbody');
   tbody.innerHTML = '';
@@ -104,23 +115,46 @@ function render() {
   document.getElementById('p-vat').textContent = vat_total.toFixed(2);
   document.getElementById('p-total').textContent = (subtotal + vat_total).toFixed(2);
   document.getElementById('items_json').value = JSON.stringify(items);
-  document.getElementById('supplier_input').value = document.getElementById('supplier').value;
 }
 
+// This remove function is also perfect, no changes needed.
 function removeItem(i) {
   items.splice(i, 1);
   render();
 }
 
+
+// --- NEW: Add this function ---
+// This function auto-fills the text fields when you select from the dropdown
+document.getElementById('product-select').addEventListener('change', (e) => {
+    const sel = e.target;
+    const sku = sel.value;
+    if (!sku) return; // Ignore the "-- select --" option
+    
+    const opt = sel.options[sel.selectedIndex];
+    const name = opt.dataset.name;
+    const cost = parseFloat(opt.dataset.cost) || 0.00;
+    
+    document.getElementById('p-sku').value = sku;
+    document.getElementById('p-name').value = name;
+    document.getElementById('p-unit').value = cost.toFixed(2);
+});
+
+
+// --- MODIFIED: This is the 'Add Item' button click ---
 document.getElementById('add-p').onclick = (e) => {
-  e.preventDefault();
-  const sel = document.getElementById('product-select');
-  const sku = sel.value;
-  const name = sel.options[sel.selectedIndex]?.dataset.name || 'Unknown';
+  e.preventDefault(); // Keep this
+  
+  // --- Read from the text inputs, NOT the select box ---
+  const sku = document.getElementById('p-sku').value.trim();
+  const name = document.getElementById('p-name').value.trim();
   const qty = parseInt(document.getElementById('p-qty').value) || 0;
   const unit = parseFloat(document.getElementById('p-unit').value) || 0;
 
-  if (!sku || qty <= 0) return alert('Select a product and valid quantity.');
+  // --- We check the text inputs now ---
+  if (!sku || !name || qty <= 0) {
+    return alert('SKU, Product Name, and a valid Quantity are required.');
+  }
 
   const net = qty * unit;
   const vat = Math.round(net * VAT_RATE * 100) / 100;
@@ -128,6 +162,29 @@ document.getElementById('add-p').onclick = (e) => {
 
   items.push({ sku, name, qty, unit_cost: unit, net, vat, line_total });
   render();
+
+  // --- NEW: Clear the inputs for the next item ---
+  document.getElementById('p-sku').value = '';
+  document.getElementById('p-name').value = '';
+  document.getElementById('p-qty').value = 1;
+  document.getElementById('p-unit').value = '0.00';
+  document.getElementById('product-select').value = ''; // Reset dropdown
+  document.getElementById('p-sku').focus(); // Put cursor back in SKU field
 };
+
+
+// --- NEW: This handles the final form submission ---
+// It validates that the cart isn't empty
+document.getElementById('purchase-form').addEventListener('submit', (e) => {
+    if (items.length === 0) {
+        e.preventDefault(); // Stop the form from submitting
+        alert('Cannot record a purchase with no items. Please add at least one item.');
+        return;
+    }
+    
+    // Update the hidden JSON field with the latest item data
+    // The form will now submit as normal
+    document.getElementById('items_json').value = JSON.stringify(items);
+});
 </script>
 {% endblock %}
