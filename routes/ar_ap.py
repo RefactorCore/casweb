@@ -21,6 +21,7 @@ def customers():
             return redirect(url_for('ar_ap.customers'))
         c = Customer(name=name, tin=tin, address=addr)
         db.session.add(c)
+        log_action(f'Created new customer: {name} (TIN: {tin}).')
         db.session.commit()
         flash('Customer added')
         return redirect(url_for('ar_ap.customers'))
@@ -41,6 +42,7 @@ def suppliers():
             return redirect(url_for('ar_ap.suppliers'))
         s = Supplier(name=name, tin=tin, address=addr)
         db.session.add(s)
+        log_action(f'Created new supplier: {name} (TIN: {tin}).')
         db.session.commit()
         flash('Supplier added')
         return redirect(url_for('ar_ap.suppliers'))
@@ -80,6 +82,7 @@ def ar_invoices():
         ]
         je = JournalEntry(description=f'AR Invoice #{inv.id}', entries_json=json.dumps(je_lines))
         db.session.add(je)
+        log_action(f'Created AR Invoice #{inv.id} for ₱{inv.total:,.2f}.')
         db.session.commit()
         flash('AR Invoice created and journal entry recorded.')
         return redirect(url_for('ar_ap.ar_invoices'))
@@ -120,6 +123,7 @@ def ap_invoices():
         ]
         je = JournalEntry(description=f'AP Invoice #{inv.id}', entries_json=json.dumps(je_lines))
         db.session.add(je)
+        log_action(f'Created AP Invoice #{inv.id} for ₱{inv.total:,.2f}.')
         db.session.commit()
         flash('AP Invoice created and journal entry recorded.')
         return redirect(url_for('ar_ap.ap_invoices'))
@@ -183,9 +187,11 @@ def record_payment():
     # Save the payment record
     p = Payment(amount=round(amount, 2), ref_type=ref_type, ref_id=ref_id, method=method, wht_amount=wht_amount)
     db.session.add(p)
+    db.session.flush()
 
     je = JournalEntry(description=f'Payment for {ref_type} #{ref_id}', entries_json=json.dumps(je_lines))
     db.session.add(je)
+    log_action(f'Recorded Payment #{p.id} of ₱{p.amount:,.2f} for {ref_type} #{ref_id}.')
     db.session.commit()
     flash('Payment recorded and journal entry created.')
     # Redirect based on where payment was made from
@@ -250,6 +256,7 @@ def credit_memos():
         ]
         je = JournalEntry(description=f'Credit Memo #{cm.id} for {reason}', entries_json=json.dumps(je_lines))
         db.session.add(je)
+        log_action(f'Created Credit Memo #{cm.id} for ₱{cm.total_amount:,.2f} (Reason: {reason}).')
         db.session.commit()
         flash('Credit Memo created successfully.', 'success')
         return redirect(url_for('ar_ap.credit_memos'))

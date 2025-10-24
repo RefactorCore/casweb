@@ -37,6 +37,7 @@ def add_account():
 
     new_account = Account(code=code, name=name, type=type)
     db.session.add(new_account)
+    log_action(f'Created new account: {code} - {name} ({type}).')
     db.session.commit()
     flash('Account added successfully.', 'success')
     return redirect(url_for('accounts.chart_of_accounts'))
@@ -65,6 +66,7 @@ def update_account(account_id):
     account.code = new_code
     account.name = new_name
     account.type = new_type
+    log_action(f'Updated account {account.id}: {new_code} - {new_name} ({new_type}).')
     db.session.commit()
     flash('Account updated successfully.', 'success')
     return redirect(url_for('accounts.chart_of_accounts'))

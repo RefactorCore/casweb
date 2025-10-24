@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file, Response, session
-from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry, StockAdjustment, Account
+from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry, StockAdjustment, Account, Supplier
 import json
 from config import Config
 from datetime import datetime, timedelta
@@ -84,7 +84,7 @@ def index():
     total_inventory_value = sum(p.cost_price * p.quantity for p in active_products)
     products_in_stock = Product.query.filter(Product.quantity > 0, Product.is_active == True).count()
     # --- END OF NEW ---
-    
+
     # --- Get period filter (default to '7' days) ---
     period = request.args.get('period', '7')
     today = datetime.utcnow()
@@ -218,6 +218,11 @@ def inventory():
     safe_args = {k: v for k, v in request.args.items() if k != 'page'}
 
     all_active_products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
+
+
+    has_opening_balance = db.session.query(JournalEntry.id)\
+        .filter(JournalEntry.entries_json.ilike('%"account_code": "302"%'))\
+        .first() is not None
     
     return render_template(
         'inventory.html',
@@ -226,7 +231,8 @@ def inventory():
         search=search,
         # 👇 NEW: Pass the filtered arguments dictionary
         safe_args=safe_args,
-        all_active_products=all_active_products
+        all_active_products=all_active_products,
+        has_opening_balance=has_opening_balance
     )
 
 # ✅ Update product
@@ -473,7 +479,7 @@ def api_add_multiple_products():
 def purchase():
     if request.method == 'POST':
         try:
-            supplier = request.form.get('supplier', '').strip() or 'Unknown'
+            supplier_name = request.form.get('supplier', '').strip() or 'Unknown'
             items_raw = request.form.get('items_json')
             items = json.loads(items_raw) if items_raw else []
 
@@ -481,8 +487,16 @@ def purchase():
                 flash("No items added to the purchase. Please add products first.", "warning")
                 return redirect(url_for('core.purchase'))
 
+            # --- NEW: Find or Create Supplier ---
+            # This makes your supplier list grow automatically
+            supplier = Supplier.query.filter_by(name=supplier_name).first()
+            if not supplier and supplier_name != 'Unknown':
+                supplier = Supplier(name=supplier_name)
+                db.session.add(supplier)
+                db.session.flush()
+
             # --- Create Purchase record ---
-            purchase = Purchase(total=0, vat=0, supplier=supplier)
+            purchase = Purchase(total=0, vat=0, supplier=supplier_name)
             db.session.add(purchase)
             db.session.flush()
 
@@ -510,16 +524,22 @@ def purchase():
                         name=name,
                         sale_price=round(unit_cost * 1.5, 2),  # 50% markup default
                         cost_price=unit_cost,
-                        quantity=qty
+                        quantity=qty,
+                        is_active=True
                     )
                     db.session.add(product)
                     db.session.flush()
                 else:
                     # Weighted average cost update
-                    old_val = product.cost_price * product.quantity
-                    new_val = unit_cost * qty
-                    product.quantity += qty
-                    product.cost_price = (old_val + new_val) / product.quantity
+                    # Make sure product quantity is not zero to avoid DivisionByZero
+                    if product.quantity + qty > 0:
+                        old_val = product.cost_price * product.quantity
+                        new_val = unit_cost * qty
+                        product.quantity += qty
+                        product.cost_price = (old_val + new_val) / product.quantity
+                    else:
+                        product.quantity += qty # This handles 0 case
+                        product.cost_price = unit_cost # Just update to new cost
 
                 # --- Record PurchaseItem ---
                 purchase_item = PurchaseItem(
@@ -547,10 +567,11 @@ def purchase():
                 {"account_code": "201", "debit": 0, "credit": total}              # 201: Accounts Payable
             ]
             journal = JournalEntry(
-                description=f"Purchase #{purchase.id} - {supplier}",
+                description=f"Purchase #{purchase.id} - {supplier_name}",
                 entries_json=json.dumps(journal_lines)
             )
             db.session.add(journal)
+            log_action(f'Recorded Purchase #{purchase.id} from {supplier_name} for ₱{total:,.2f}.')
             db.session.commit()
 
             flash(f"✅ Purchase #{purchase.id} recorded successfully.", "success")
@@ -561,9 +582,11 @@ def purchase():
             flash(f"❌ Error saving purchase: {str(e)}", "danger")
             return redirect(url_for('core.purchase'))
 
-    # --- GET method ---
     products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
-    return render_template('purchase.html', products=products)
+    suppliers = Supplier.query.order_by(Supplier.name).all() # Get all suppliers
+    today = datetime.utcnow().strftime('%Y-%m-%d') # Get today's date
+    
+    return render_template('purchase.html', products=products, suppliers=suppliers, today=today)
 
 
 
@@ -577,6 +600,7 @@ def purchases():
 @core_bp.route('/delete_purchase/<int:purchase_id>', methods=['POST'])
 def delete_purchase(purchase_id):
     purchase = Purchase.query.get_or_404(purchase_id)
+    log_action(f'Deleted Purchase #{purchase.id} (Supplier: {purchase.supplier}, Total: ₱{purchase.total:,.2f}).')
     db.session.delete(purchase)
     db.session.commit()
     return jsonify({'status': 'deleted'})
@@ -692,6 +716,8 @@ def api_sale():
         ]
         # --- MODIFIED: Update Journal Entry description ---
         db.session.add(JournalEntry(description=f'Sale #{sale.id} ({full_doc_number})', entries_json=json.dumps(je_lines)))
+
+        log_action(f'Recorded Sale #{sale.id} ({full_doc_number}) for ₱{total:,.2f}.')
         
         db.session.commit()
         
@@ -1183,6 +1209,7 @@ def settings():
         profile.tin = request.form.get('tin')
         profile.address = request.form.get('address')
         profile.business_style = request.form.get('business_style')
+        log_action(f'Updated Company Profile settings.')
         db.session.commit()
         flash('Company profile updated successfully!', 'success')
         return redirect(url_for('core.settings'))
