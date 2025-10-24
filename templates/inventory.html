@@ -91,7 +91,8 @@
                 <a href="{{ url_for('reports.stock_card', product_id=p.id) }}" class="btn btn-sm btn-outline-info" title="View Stock Card">
                     <i class="bi bi-card-list"></i>
                 </a>
-                <button class="btn btn-sm btn-outline-secondary" onclick="editProduct('{{ p.sku }}','{{ p.name }}',{{ p.sale_price }},{{ p.cost_price }})">
+                <button class="btn btn-sm btn-outline-secondary"
+                          onclick='editProduct({{ p.sku|tojson }}, {{ p.name|tojson }}, {{ p.sale_price }}, {{ p.cost_price }})'>
                   <i class="bi bi-pencil"></i>
                 </button>
 <!--                 <button class="btn btn-sm btn-outline-danger" onclick="deleteProduct('{{ p.sku }}')">

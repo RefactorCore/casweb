@@ -214,24 +214,40 @@ document.addEventListener("DOMContentLoaded", function() {
   const qtyModal = new bootstrap.Modal(qtyModalEl);
 
   function renderCart() {
-    const list = document.getElementById('cartList');
-    list.innerHTML = '';
-    let total = 0;
-    cart.forEach((item, i) => {
-      total += item.price * item.qty;
-      list.innerHTML += `
-        <div class="d-flex justify-content-between align-items-center border-bottom py-1">
-          <div>
-            <strong>${item.name}</strong><br>
-            <small>${item.qty} × ₱${item.price.toFixed(2)}</small>
-          </div>
-          <button class="btn btn-sm btn-outline-danger" onclick="removeItem(${i})">
-            <i class="bi bi-trash"></i>
-          </button>
-        </div>`;
-    });
-    document.getElementById('total').innerText = total.toFixed(2);
-  }
+  const list = document.getElementById('cartList');
+  list.innerHTML = ''; // Clear existing list
+  let total = 0;
+
+  cart.forEach((item, i) => {
+    total += item.price * item.qty;
+
+    // Create wrapper div
+    const row = document.createElement('div');
+    row.className = 'd-flex justify-content-between align-items-center border-bottom py-1';
+
+    // Left side: product name and qty × price
+    const left = document.createElement('div');
+    const nameEl = document.createElement('strong');
+    nameEl.textContent = item.name; // Safe text only
+    const br = document.createElement('br');
+    const qtyEl = document.createElement('small');
+    qtyEl.textContent = `${item.qty} × ₱${item.price.toFixed(2)}`;
+
+    left.append(nameEl, br, qtyEl);
+
+    // Delete button
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm btn-outline-danger';
+    btn.innerHTML = '<i class="bi bi-trash"></i>';
+    btn.addEventListener('click', () => removeItem(i));
+
+    row.append(left, btn);
+    list.append(row);
+  });
+
+  document.getElementById('total').innerText = total.toFixed(2);
+}
+
 
   // Make this function global so the inline onclick can find it
   window.removeItem = function(i) {
