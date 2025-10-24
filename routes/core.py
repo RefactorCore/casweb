@@ -77,13 +77,14 @@ def setup_admin():
 def index():
     # --- Base data ---
     products = Product.query.all()
-    low_stock = [p for p in products if p.quantity <= 5]
+    low_stock = [p for p in products if p.quantity <= 5 and p.is_active]
 
-    # --- UNFILTERED (All-Time) Inventory Totals ---
-    # These are point-in-time values and should not be filtered by date.
-    total_inventory_value = sum(p.cost_price * p.quantity for p in products)
-    products_in_stock = Product.query.filter(Product.quantity > 0).count()
-
+    # --- NEW: Filter inventory value to only include active products ---
+    active_products = [p for p in products if p.is_active]
+    total_inventory_value = sum(p.cost_price * p.quantity for p in active_products)
+    products_in_stock = Product.query.filter(Product.quantity > 0, Product.is_active == True).count()
+    # --- END OF NEW ---
+    
     # --- Get period filter (default to '7' days) ---
     period = request.args.get('period', '7')
     today = datetime.utcnow()
@@ -209,12 +210,14 @@ def inventory():
         )
 
     # Order and paginate
-    query = query.order_by(Product.name.asc())
+    query = query.order_by(Product.is_active.desc(), Product.name.asc())
     pagination = paginate_query(query, per_page=12) # Using 2 for testing
 
     # 👇 NEW: Create a dictionary of current arguments, excluding 'page'
     # This is the fix for the pagination link error.
     safe_args = {k: v for k, v in request.args.items() if k != 'page'}
+
+    all_active_products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
     
     return render_template(
         'inventory.html',
@@ -222,7 +225,8 @@ def inventory():
         pagination=pagination,
         search=search,
         # 👇 NEW: Pass the filtered arguments dictionary
-        safe_args=safe_args
+        safe_args=safe_args,
+        all_active_products=all_active_products
     )
 
 # ✅ Update product
@@ -232,7 +236,7 @@ def update_product():
     product = Product.query.filter_by(sku=sku).first()
     if not product:
         flash('Product not found.', 'danger')
-        return redirect(url_for('core.inventory'))
+        return redirect(request.referrer or url_for('core.inventory'))
 
     # Update fields
     product.name = request.form.get('name')
@@ -243,19 +247,28 @@ def update_product():
     log_action(f'Updated product SKU: {product.sku}, Name: {product.name}.')
     db.session.commit()
     flash(f'Product {product.sku} updated successfully.', 'success')
-    return redirect(url_for('core.inventory'))
+    return redirect(request.referrer or url_for('core.inventory'))
 
 
-# ✅ Delete product
-@core_bp.route('/delete_product/<sku>', methods=['POST'])
-def delete_product(sku):
-    product = Product.query.filter_by(sku=sku).first()
-    if not product:
-        return jsonify({'error': 'Product not found'}), 404
-
-    db.session.delete(product)
+@core_bp.route('/product/toggle-status/<int:product_id>', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def toggle_product_status(product_id):
+    product = Product.query.get_or_404(product_id)
+    
+    # Toggle the status
+    product.is_active = not product.is_active
+    
+    if product.is_active:
+        log_action(f'Enabled product: {product.sku} ({product.name}).')
+        flash(f'Product {product.name} has been enabled.', 'success')
+    else:
+        log_action(f'Disabled product: {product.sku} ({product.name}).')
+        flash(f'Product {product.name} has been disabled.', 'danger')
+        
     db.session.commit()
-    return jsonify({'status': 'deleted'})
+    return jsonify({'status': 'ok', 'new_is_active': product.is_active})
+
 
 # --- ADD THIS ENTIRE FUNCTION ---
 
@@ -549,7 +562,7 @@ def purchase():
             return redirect(url_for('core.purchase'))
 
     # --- GET method ---
-    products = Product.query.order_by(Product.name.asc()).all()
+    products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
     return render_template('purchase.html', products=products)
 
 
@@ -583,7 +596,7 @@ def view_purchase(purchase_id):
 def pos():
     # --- Handle GET (view with pagination and search) ---
     search = request.args.get('search', '').strip()
-    query = Product.query
+    query = Product.query.filter_by(is_active=True)
 
     if search:
         query = query.filter(
