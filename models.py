@@ -29,6 +29,7 @@ class Product(db.Model):
     sale_price = db.Column(db.Float, nullable=False, default=0.0)
     cost_price = db.Column(db.Float, nullable=False, default=0.0)
     quantity = db.Column(db.Integer, nullable=False, default=0)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     LOW_STOCK_THRESHOLD = 5
 
