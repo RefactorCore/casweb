@@ -597,13 +597,70 @@ def purchases():
     return render_template('purchases.html', purchases=purchases)
 
 
-@core_bp.route('/delete_purchase/<int:purchase_id>', methods=['POST'])
-def delete_purchase(purchase_id):
+# @core_bp.route('/delete_purchase/<int:purchase_id>', methods=['POST'])
+# def delete_purchase(purchase_id):
+#     purchase = Purchase.query.get_or_404(purchase_id)
+#     log_action(f'Deleted Purchase #{purchase.id} (Supplier: {purchase.supplier}, Total: ₱{purchase.total:,.2f}).')
+#     db.session.delete(purchase)
+#     db.session.commit()
+#     return jsonify({'status': 'deleted'})
+@core_bp.route('/purchase/cancel/<int:purchase_id>', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant') # Protect this action
+def cancel_purchase(purchase_id):
+    """
+    Cancels a purchase by creating a reversing journal entry.
+    This does NOT delete the record, ensuring compliance.
+    """
     purchase = Purchase.query.get_or_404(purchase_id)
-    log_action(f'Deleted Purchase #{purchase.id} (Supplier: {purchase.supplier}, Total: ₱{purchase.total:,.2f}).')
-    db.session.delete(purchase)
-    db.session.commit()
-    return jsonify({'status': 'deleted'})
+
+    # 1. Check if already canceled
+    if purchase.status == 'Canceled':
+        flash(f'Purchase #{purchase.id} is already canceled.', 'warning')
+        return redirect(url_for('core.purchases'))
+
+    try:
+        # 2. Calculate reversal amounts
+        total_net = purchase.total - purchase.vat
+        total_vat = purchase.vat
+        total = purchase.total
+
+        # 3. Create the reversing journal entry
+        # Original JE was:
+        #   Debit:   Inventory (120) [net]
+        #   Debit:   VAT Input (602) [vat]
+        #   Credit:  Accounts Payable (201) [total]
+        #
+        # Reversing JE is:
+        #   Debit:   Accounts Payable (201) [total]
+        #   Credit:  Inventory (120) [net]
+        #   Credit:  VAT Input (602) [vat]
+        
+        journal_lines = [
+            {"account_code": "201", "debit": total, "credit": 0},         # 201: Accounts Payable
+            {"account_code": "120", "debit": 0, "credit": total_net},     # 120: Inventory
+            {"account_code": "602", "debit": 0, "credit": total_vat}      # 602: VAT Input
+        ]
+        journal = JournalEntry(
+            description=f"Reversal/Cancel of Purchase #{purchase.id} - {purchase.supplier}",
+            entries_json=json.dumps(journal_lines)
+        )
+        db.session.add(journal)
+
+        # 4. Update the purchase status
+        purchase.status = 'Canceled'
+        
+        # 5. Log this compliant action
+        log_action(f'Canceled Purchase #{purchase.id} (Supplier: {purchase.supplier}, Total: ₱{purchase.total:,.2f}). Reversing JE created.')
+        
+        db.session.commit()
+        flash(f'Purchase #{purchase.id} has been canceled and a reversing journal entry was posted.', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error canceling purchase: {str(e)}', 'danger')
+
+    return redirect(url_for('core.purchases'))
 
 
 # ✅ New: View a specific purchase
