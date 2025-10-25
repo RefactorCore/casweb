@@ -72,6 +72,94 @@
     font-family: monospace;
     white-space: pre-wrap;
   }
+
+/* --- ADD THIS CSS INSIDE YOUR <style> TAG --- */
+
+/* Style for the receipt popup */
+#receiptModal .modal-dialog {
+  max-width: 450px; /* A bit wider for the receipt */
+}
+#receiptModal .modal-content {
+  border: 2px solid #000;
+}
+#receiptModal .modal-header {
+  border-bottom: 2px solid #000;
+  padding: 0.75rem 1.25rem;
+}
+#receiptModal .modal-title {
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 1.2rem;
+}
+
+/* This is the main receipt body style */
+#receiptTemplate {
+  font-family: 'Courier New', Courier, monospace;
+  background: #fdfdfa; /* Off-white paper color */
+  border: 1px dashed #999;
+  padding: 15px;
+  font-size: 14px;
+  color: #000;
+}
+#receiptTemplate hr {
+  border-top: 1px dashed #000;
+  margin: 10px 0;
+}
+.receipt-header {
+  text-align: center;
+  margin-bottom: 10px;
+}
+.receipt-header h5 {
+  margin: 0;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+.receipt-header small {
+  font-size: 13px;
+}
+.receipt-field {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  border-bottom: 1px dotted #777;
+}
+.receipt-field strong {
+  margin-right: 10px;
+}
+.receipt-items-header {
+  display: flex;
+  justify-content: space-between;
+  font-weight: bold;
+  border-bottom: 1px solid #000;
+  margin-top: 15px;
+}
+.receipt-item {
+  display: flex;
+  margin-top: 5px;
+}
+.receipt-item .item-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.receipt-item .item-qty, .receipt-item .item-total {
+  text-align: right;
+}
+.receipt-item .item-qty { width: 70px; }
+.receipt-item .item-total { width: 90px; }
+
+.receipt-totals {
+  margin-top: 15px;
+}
+.receipt-totals div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 1.1rem;
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+/* --- END OF NEW CSS --- */
 </style>
 
 <div class="pos-container">
@@ -190,11 +278,23 @@
 </div>
 
 <div class="modal fade" id="receiptModal" tabindex="-1">
-  <div class="modal-dialog modal-sm modal-dialog-centered">
-    <div class="modal-content p-3">
-      <h5 class="text-center">Receipt</h5>
-      <pre id="receiptText"></pre>
-      <button class="btn btn-outline-secondary w-100" data-bs-dismiss="modal">Close</button>
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Receipt</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="receiptTemplate"></div>
+      </div>
+      <div class="modal-footer justify-content-between">
+        <button type="button" class="btn btn-outline-secondary" id="printReceiptBtn">
+          <i class="bi bi-printer"></i> Print
+        </button>
+        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">
+          <i class="bi bi-check-lg"></i> Done
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -353,8 +453,8 @@ document.addEventListener("DOMContentLoaded", function() {
     const data = await response.json();
     if (data.status === 'ok') {
       const change = cash - total;
-      const receipt = generateReceipt(cart, total, cash, change, data.receipt_number);
-      document.getElementById('receiptText').innerText = receipt;
+      const receipt = generateReceipt(cart, total, cash, change, data.receipt_number, data.vat);
+      document.getElementById('receiptTemplate').innerHTML = receipt;
       new bootstrap.Modal(document.getElementById('receiptModal')).show();
       
       updateStockOnPage(cart); 
@@ -387,18 +487,167 @@ document.addEventListener("DOMContentLoaded", function() {
     }
   }
 
-  function generateReceipt(cart, total, cash, change, receiptNumber) {
-    let text = `     🧾 RECEIPT ${receiptNumber || ''}\n`;
-    text += "--------------------------------\n";
-    cart.forEach(i => text += `${i.name}\n  ${i.qty} × ₱${i.price.toFixed(2)} = ₱${(i.qty*i.price).toFixed(2)}\n`);
-    text += "--------------------------------\n";
-    text += `TOTAL: ₱${total.toFixed(2)}\n`;
-    text += `CASH:  ₱${cash.toFixed(2)}\n`;
-    text += `CHANGE: ₱${change.toFixed(2)}\n`;
-    text += "--------------------------------\n";
-    text += "Thank you for shopping!\n";
-    return text;
+  // --- REPLACE the old function with this new one ---
+  function generateReceipt(cart, total, cash, change, receiptNumber, vatAmount) {
+    // Helper function for date/time
+    const now = new Date();
+    const dateStr = now.toLocaleDateString();
+    const timeStr = now.toLocaleTimeString();
+
+    // Start building the HTML string
+    let html = `<div class="receipt-header">`;
+    html += `<h5>${receiptNumber || 'RECEIPT'}</h5>`; // Uses the OR/SI number
+    html += `<small>Date: ${dateStr} ${timeStr}</small>`;
+    html += `</div>`;
+    
+    html += `<hr>`;
+    
+    // Add placeholders for manual entry
+    html += `<div class="receipt-field"><strong>Customer:</strong> <span></span></div>`;
+    html += `<div class="receipt-field"><strong>TIN:</strong> <span></span></div>`;
+    html += `<div class="receipt-field"><strong>Address:</strong> <span></span></div>`;
+    
+    html += `<hr>`;
+    
+    // Items Header
+    html += `<div class="receipt-items-header">`;
+    html += `<span class="item-name">Item</span>`;
+    html += `<span class="item-qty">Qty x Price</span>`;
+    html += `<span class="item-total">Total</span>`;
+    html += `</div>`;
+    
+    // Item Lines
+    cart.forEach(i => {
+      html += `<div class="receipt-item">`;
+      html += `<span class="item-name">${i.name}</span>`;
+      html += `<span class="item-qty">${i.qty} × ${i.price.toFixed(2)}</span>`;
+      html += `<span class="item-total">₱${(i.qty * i.price).toFixed(2)}</span>`;
+      html += `</div>`;
+    });
+    
+    html += `<hr>`;
+    
+    // Totals
+    // Totals
+    // Calculate VATable Sales (Total minus VAT)
+    const vatableSales = total - (vatAmount || 0); 
+    
+    html += `<div class="receipt-totals">`;
+    
+    // --- ADD THESE NEW LINES ---
+    html += `<div style="font-weight: normal; font-size: 1rem;"><span>VATable Sales:</span> <span>₱${vatableSales.toFixed(2)}</span></div>`;
+    html += `<div style="font-weight: normal; font-size: 1rem;"><span>VAT (12%):</span> <span>₱${(vatAmount || 0).toFixed(2)}</span></div>`;
+    // --- END OF NEW LINES ---
+    
+    html += `<div><span>TOTAL:</span> <span>₱${total.toFixed(2)}</span></div>`;
+    html += `<div><span>CASH:</span> <span>₱${cash.toFixed(2)}</span></div>`;
+    html += `<div><span>CHANGE:</span> <span>₱${change.toFixed(2)}</span></div>`;
+    html += `</div>`;
+    
+    html += `<hr>`;
+    
+    // Signature placeholder
+    html += `<div class"receipt-footer" style="margin-top: 25px;">`;
+    html += `<div class="receipt-field"><strong>Signature:</strong> <span></span></div>`;
+    html += `<p style="text-align: center; font-size: 13px; margin-top: 20px;">Thank you!</p>`;
+    html += `</div>`;
+    
+    return html;
   }
+
+// --- ADD THIS NEW LISTENER FOR THE PRINT BUTTON ---
+  document.getElementById('printReceiptBtn').addEventListener('click', function() {
+    const receiptHtml = document.getElementById('receiptTemplate').innerHTML;
+    
+    // Open a new window
+    const printWindow = window.open('', '', 'height=600,width=450');
+    
+    printWindow.document.write('<html><head><title>Print Receipt</title>');
+    printWindow.document.write('<style>');
+    // Embed the exact styles needed for the receipt to print correctly
+    printWindow.document.write(`
+      body {
+        font-family: 'Courier New', Courier, monospace;
+        margin: 15px;
+        font-size: 14px;
+        color: #000;
+      }
+      hr {
+        border-top: 1px dashed #000;
+        margin: 10px 0;
+      }
+      .receipt-header {
+        text-align: center;
+        margin-bottom: 10px;
+      }
+      .receipt-header h5 {
+        margin: 0;
+        font-weight: bold;
+        text-transform: uppercase;
+        font-size: 1.2rem;
+      }
+      .receipt-header small { font-size: 13px; }
+      .receipt-field {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 5px;
+        border-bottom: 1px dotted #777;
+      }
+      .receipt-field strong { margin-right: 10px; }
+      .receipt-items-header {
+        display: flex;
+        justify-content: space-between;
+        font-weight: bold;
+        border-bottom: 1px solid #000;
+        margin-top: 15px;
+      }
+      .receipt-item {
+        display: flex;
+        margin-top: 5px;
+      }
+      .receipt-item .item-name {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .receipt-item .item-qty, .receipt-item .item-total {
+        text-align: right;
+      }
+      .receipt-item .item-qty { width: 70px; }
+      .receipt-item .item-total { width: 90px; }
+      .receipt-totals {
+        margin-top: 15px;
+      }
+      .receipt-totals div {
+        display: flex;
+        justify-content: space-between;
+        font-size: 1.1rem;
+        font-weight: bold;
+        margin-bottom: 5px;
+      }
+      /* Style fix for the VAT lines */
+      .receipt-totals div[style*="font-weight: normal"] {
+        font-weight: normal !important;
+        font-size: 1rem !important;
+      }
+      .receipt-footer { margin-top: 25px; }
+    `);
+    printWindow.document.write('</style></head><body>');
+    // Write the receipt content
+    printWindow.document.write(receiptHtml);
+    printWindow.document.write('</body></html>');
+    
+    printWindow.document.close();
+    printWindow.focus();
+    
+    // Use a small timeout to ensure content is loaded before triggering print
+    setTimeout(() => {
+      printWindow.print();
+      printWindow.close();
+    }, 250);
+  });
+  // --- END OF NEW LISTENER ---
 
 }); // --- END of DOMContentLoaded wrapper ---
 </script>
