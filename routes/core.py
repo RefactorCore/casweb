@@ -722,7 +722,12 @@ def api_sale():
         db.session.commit()
         
         # --- MODIFIED: Return the new document number to the frontend ---
-        return jsonify({'status': 'ok', 'sale_id': sale.id, 'receipt_number': full_doc_number})
+        return jsonify({
+            'status': 'ok', 
+            'sale_id': sale.id, 
+            'receipt_number': full_doc_number,
+            'vat': vat_total  # <-- ADD THIS LINE
+        })
 
     # --- NEW: Error handling for database issues ---
     except exc.IntegrityError:
