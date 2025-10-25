@@ -70,6 +70,7 @@ class Purchase(db.Model):
     supplier = db.Column(db.String(200))
     total = db.Column(db.Float, nullable=False, default=0.0)
     vat = db.Column(db.Float, nullable=False, default=0.0)
+    status = db.Column(db.String(50), default='Recorded', nullable=False)
     items = db.relationship('PurchaseItem', backref='purchase', cascade='all, delete-orphan')
 
 class PurchaseItem(db.Model):
