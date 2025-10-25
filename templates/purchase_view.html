@@ -98,9 +98,19 @@
 
   <!-- Footer Actions -->
   <div class="mt-4 d-flex justify-content-between">
-    <button class="btn btn-danger" onclick="deletePurchase({{ purchase.id }})">
-      🗑 Delete Purchase
-    </button>
+    {% if purchase.status != 'Canceled' %}
+      <form action="{{ url_for('core.cancel_purchase', purchase_id=purchase.id) }}" 
+            method="POST" 
+            onsubmit="return confirm('Are you sure you want to cancel this purchase? This will create a reversing journal entry and cannot be undone.');"
+            style="display: inline;">
+        <button type="submit" class="btn btn-warning">
+          <i class="bi bi-x-circle"></i> Cancel Purchase
+        </button>
+      </form>
+    
+    {% else %}
+      <span class="badge bg-lg bg-secondary">This purchase has been canceled.</span>
+    {% endif %}
   </div>
 
 </div>
@@ -122,22 +132,5 @@
 }
 </style>
 
-<!-- Delete Script -->
-<script>
-function deletePurchase(id) {
-  if (confirm(`Delete Purchase #${id}? This cannot be undone.`)) {
-    fetch(`/delete_purchase/${id}`, { method: 'POST' })
-      .then(res => res.json())
-      .then(data => {
-        if (data.status === 'deleted') {
-          alert('Purchase deleted successfully.');
-          window.location.href = "{{ url_for('core.purchases') }}";
-        } else {
-          alert('Error deleting purchase.');
-        }
-      });
-  }
-}
-</script>
 
 {% endblock %}

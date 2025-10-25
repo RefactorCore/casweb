@@ -1,5 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
 <div class="container-fluid py-4">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="fw-bold text-primary">🧾 New Purchase</h2>
@@ -124,21 +126,32 @@ function removeItem(i) {
 }
 
 
-// --- NEW: Add this function ---
-// This function auto-fills the text fields when you select from the dropdown
-document.getElementById('product-select').addEventListener('change', (e) => {
-    const sel = e.target;
-    const sku = sel.value;
-    if (!sku) return; // Ignore the "-- select --" option
+// --- ADD THIS NEW BLOCK to initialize TomSelect ---
+  new TomSelect('#product-select', {
+    create: false, // Don't allow creating new options
+    sortField: { field: "text", direction: "asc" },
     
-    const opt = sel.options[sel.selectedIndex];
-    const name = opt.dataset.name;
-    const cost = parseFloat(opt.dataset.cost) || 0.00;
-    
-    document.getElementById('p-sku').value = sku;
-    document.getElementById('p-name').value = name;
-    document.getElementById('p-unit').value = cost.toFixed(2);
-});
+    // This `onChange` replaces the event listener we just deleted
+    onChange: (sku) => {
+      const sel = document.getElementById('product-select'); // Get the original select
+      if (!sku) {
+        // Clear fields if "select..." is chosen
+        document.getElementById('p-sku').value = '';
+        document.getElementById('p-name').value = '';
+        document.getElementById('p-unit').value = '0.00';
+        return;
+      }
+      
+      const opt = sel.options[sel.selectedIndex];
+      const name = opt.dataset.name;
+      const cost = parseFloat(opt.dataset.cost) || 0.00;
+      
+      document.getElementById('p-sku').value = sku;
+      document.getElementById('p-name').value = name;
+      document.getElementById('p-unit').value = cost.toFixed(2);
+    }
+  });
+// --- END OF NEW BLOCK ---
 
 
 // --- MODIFIED: This is the 'Add Item' button click ---

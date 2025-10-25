@@ -50,12 +50,28 @@
               <td>₱{{ "%.2f"|format(p.vat) }}</td>
               <td>{{ p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else '—' }}</td>
               <td>
+                {% if p.status != 'Canceled' %}
+                <form id="cancel-form-{{ p.id }}" 
+                      action="{{ url_for('core.cancel_purchase', purchase_id=p.id) }}" 
+                      method="POST" 
+                      style="display: none;">
+                </form>
+                {% endif %}
+
                 <div class="btn-group btn-group-sm">
                   <a href="{{ url_for('core.view_purchase', purchase_id=p.id) }}" 
                      class="btn btn-outline-info">🔍 View</a>
-                  <button class="btn btn-outline-danger" onclick="deletePurchase({{ p.id }})">
-                    🗑 Delete
-                  </button>
+                     
+                  {% if p.status != 'Canceled' %}
+                    <button type"submit" 
+                            class="btn btn-warning" 
+                            form="cancel-form-{{ p.id }}"
+                            onclick="return confirm('Are you sure you want to cancel this purchase? This will create a reversing journal entry and cannot be undone.');">
+                      <i class="bi bi-x-circle"></i> Cancel
+                    </button>
+                  {% else %}
+                    <span class="badge bg-secondary">Canceled</span>
+                  {% endif %}
                 </div>
               </td>
             </tr>
@@ -113,20 +129,6 @@
     rows.forEach(r => tbody.appendChild(r));
   });
 
-  // 🗑 Delete with confirmation
-  function deletePurchase(id) {
-    if (confirm(`Delete Purchase #${id}? This action cannot be undone.`)) {
-      fetch(`/delete_purchase/${id}`, { method: 'POST' })
-        .then(res => res.json())
-        .then(data => {
-          if (data.status === 'deleted') {
-            alert('Purchase deleted successfully!');
-            location.reload();
-          } else {
-            alert('Error deleting purchase.');
-          }
-        });
-    }
-  }
+
 </script>
 {% endblock %}
