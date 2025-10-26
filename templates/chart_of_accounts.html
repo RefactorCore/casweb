@@ -23,10 +23,22 @@
                     {% for acc in accounts %}
                     <tr>
                         <td>{{ acc.code }}</td>
-                        <td>{{ acc.name }}</td>
+                        <td>
+                            {{ acc.name }}
+                            {% if acc.name in system_accounts %}
+                                <span class="badge bg-info-subtle text-dark-emphasis ms-2" title="This is a required system account.">System</span>
+                            {% endif %}
+                        </td>
                         <td><span class="badge bg-secondary">{{ acc.type }}</span></td>
                         <td>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="openEditModal('{{ acc.id }}', '{{ acc.code }}', '{{ acc.name }}', '{{ acc.type }}')">
+                            <button class="btn btn-sm btn-outline-secondary" 
+                                    onclick="openEditModal(
+                                        '{{ acc.id }}', 
+                                        '{{ acc.code }}', 
+                                        '{{ acc.name }}', 
+                                        '{{ acc.type }}',
+                                        {{ (acc.name in system_accounts)|lower }} 
+                                    )">
                                 <i class="bi bi-pencil"></i> Edit
                             </button>
                         </td>
@@ -91,6 +103,9 @@
                     <div class="mb-3">
                         <label class="form-label">Account Name</label>
                         <input type="text" id="editName" name="name" class="form-control" required>
+                        <div id="editNameHelp" class="form-text text-danger" style="display: none;">
+                            The name of a critical system account cannot be changed.
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Account Type</label>
@@ -113,14 +128,27 @@
 </div>
 
 <script>
-function openEditModal(id, code, name, type) {
+// --- UPDATE THE FUNCTION SIGNATURE ---
+function openEditModal(id, code, name, type, isSystemAccount) {
     const form = document.getElementById('editForm');
     form.action = `/accounts/update/${id}`;
-    document.getElementById('editCode').value = code;
-    document.getElementById('editName').value = name;
     
-    // 👇 UPDATED LINE: Set the correct option in the select field
-    document.getElementById('editType').value = type; 
+    document.getElementById('editCode').value = code;
+    document.getElementById('editType').value = type;
+    
+    // --- ADD THIS LOGIC ---
+    const nameField = document.getElementById('editName');
+    const nameHelp = document.getElementById('editNameHelp');
+    
+    nameField.value = name;
+    
+    // --- FIX: Change .disabled to .readOnly ---
+    // A readonly field's value IS submitted with the form.
+    nameField.readOnly = isSystemAccount;
+    
+    // Show/hide the helper text
+    nameHelp.style.display = isSystemAccount ? 'block' : 'none';
+    // --- END OF ADDED LOGIC ---
     
     new bootstrap.Modal(document.getElementById('editAccountModal')).show();
 }
