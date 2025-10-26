@@ -7,7 +7,7 @@ from sqlalchemy import func, exc
 from models import Sale, CompanyProfile, User, AuditLog
 import io, csv, json
 from io import StringIO
-from routes.utils import paginate_query
+from routes.utils import paginate_query, log_action, get_system_account_code
 from passlib.hash import pbkdf2_sha256
 from flask_login import login_user, logout_user, login_required, current_user
 from routes.decorators import role_required
@@ -306,6 +306,13 @@ def inventory_bulk_add():
             products_added = 0
             total_value = 0.0
             errors = []
+
+            try:
+                inventory_code = get_system_account_code('Inventory')
+                equity_code = get_system_account_code('Opening Balance Equity')
+            except Exception as e:
+                flash(f'An error occurred: {str(e)}', 'danger')
+                return redirect(request.url)
             
             for row in csv_reader:
                 if not row or len(row) < 5:
@@ -344,8 +351,8 @@ def inventory_bulk_add():
                         
                         # 120: Inventory, 302: Opening Balance Equity
                         je_lines = [
-                            {'account_code': '120', 'debit': initial_value, 'credit': 0},
-                            {'account_code': '302', 'debit': 0, 'credit': initial_value}
+                            {'account_code': inventory_code, 'debit': initial_value, 'credit': 0},
+                            {'account_code': equity_code, 'debit': 0, 'credit': initial_value}
                         ]
                         je = JournalEntry(
                             description=f'Beginning Balance for {new_prod.sku} ({new_prod.name})',
@@ -401,6 +408,11 @@ def api_add_multiple_products():
     errors = []
     
     try:
+        # --- REFACTORED: Get codes once ---
+        inventory_code = get_system_account_code('Inventory')
+        equity_code = get_system_account_code('Opening Balance Equity')
+        # --- END REFACTOR ---
+        
         for p_data in products_data:
             # Basic validation
             sku = p_data.get('sku')
@@ -436,8 +448,8 @@ def api_add_multiple_products():
                     
                     # 120: Inventory, 302: Opening Balance Equity
                     je_lines = [
-                        {'account_code': '120', 'debit': initial_value, 'credit': 0},
-                        {'account_code': '302', 'debit': 0, 'credit': initial_value}
+                        {'account_code': inventory_code, 'debit': initial_value, 'credit': 0},
+                        {'account_code': equity_code, 'debit': 0, 'credit': initial_value}
                     ]
                     je = JournalEntry(
                         description=f'Beginning Balance for {new_prod.sku} ({new_prod.name})',
@@ -562,9 +574,9 @@ def purchase():
 
             # --- Record journal entry ---
             journal_lines = [
-                {"account_code": "120", "debit": total - vat_total, "credit": 0}, # 120: Inventory
-                {"account_code": "602", "debit": vat_total, "credit": 0},         # 602: VAT Input
-                {"account_code": "201", "debit": 0, "credit": total}              # 201: Accounts Payable
+                {"account_code": get_system_account_code('Inventory'), "debit": total - vat_total, "credit": 0},
+                {"account_code": get_system_account_code('VAT Input'), "debit": vat_total, "credit": 0},
+                {"account_code": get_system_account_code('Accounts Payable'), "debit": 0, "credit": total}
             ]
             journal = JournalEntry(
                 description=f"Purchase #{purchase.id} - {supplier_name}",
@@ -637,9 +649,9 @@ def cancel_purchase(purchase_id):
         #   Credit:  VAT Input (602) [vat]
         
         journal_lines = [
-            {"account_code": "201", "debit": total, "credit": 0},         # 201: Accounts Payable
-            {"account_code": "120", "debit": 0, "credit": total_net},     # 120: Inventory
-            {"account_code": "602", "debit": 0, "credit": total_vat}      # 602: VAT Input
+            {"account_code": get_system_account_code('Accounts Payable'), "debit": total, "credit": 0},
+            {"account_code": get_system_account_code('Inventory'), "debit": 0, "credit": total_net},
+            {"account_code": get_system_account_code('VAT Input'), "debit": 0, "credit": total_vat}
         ]
         journal = JournalEntry(
             description=f"Reversal/Cancel of Purchase #{purchase.id} - {purchase.supplier}",
@@ -765,11 +777,11 @@ def api_sale():
         sale.total, sale.vat = total, vat_total
 
         je_lines = [
-            {'account_code': '101', 'debit': total, 'credit': 0},                   # 101: Cash
-            {'account_code': '401', 'debit': 0, 'credit': total - vat_total},      # 401: Sales Revenue
-            {'account_code': '601', 'debit': 0, 'credit': vat_total},              # 601: VAT Payable
-            {'account_code': '501', 'debit': cogs_total, 'credit': 0},              # 501: COGS
-            {'account_code': '120', 'debit': 0, 'credit': cogs_total},              # 120: Inventory
+            {'account_code': get_system_account_code('Cash'), 'debit': total, 'credit': 0},
+            {'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': total - vat_total},
+            {'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': vat_total},
+            {'account_code': get_system_account_code('COGS'), 'debit': cogs_total, 'credit': 0},
+            {'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': cogs_total},
         ]
         # --- MODIFIED: Update Journal Entry description ---
         db.session.add(JournalEntry(description=f'Sale #{sale.id} ({full_doc_number})', entries_json=json.dumps(je_lines)))
@@ -1311,12 +1323,12 @@ def adjust_stock():
         adjustment_value = abs(quantity) * product.cost_price
         
         if quantity < 0: # Stock reduction (loss)
-            debit_account_code = "505"  # 505: Inventory Loss
-            credit_account_code = "120" # 120: Inventory
+            debit_account_code = get_system_account_code('Inventory Loss')
+            credit_account_code = get_system_account_code('Inventory')
             desc = f"Stock loss for {product.name}: {reason}"
         else: # Stock increase (gain)
-            debit_account_code = "120"  # 120: Inventory
-            credit_account_code = "406" # 406: Inventory Gain
+            debit_account_code = get_system_account_code('Inventory')
+            credit_account_code = get_system_account_code('Inventory Gain')
             desc = f"Stock gain for {product.name}: {reason}"
 
         je_lines = [

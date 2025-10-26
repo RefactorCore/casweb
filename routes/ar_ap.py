@@ -4,6 +4,7 @@ from models import db, Customer, Supplier, ARInvoice, APInvoice, Payment, Journa
 import io, csv
 import json
 from .decorators import role_required
+from .utils import log_action, get_system_account_code
 
 ar_ap_bp = Blueprint('ar_ap', __name__, url_prefix='')
 
@@ -76,10 +77,11 @@ def ar_invoices():
 
         # Journal entry
         je_lines = [
-            {'account_code': '110', 'debit': round(inv.total, 2), 'credit': 0},         # 110: Accounts Receivable
-            {'account_code': '401', 'debit': 0, 'credit': round(inv.total - inv.vat, 2)}, # 401: Sales Revenue
-            {'account_code': '601', 'debit': 0, 'credit': round(inv.vat, 2)},          # 601: VAT Payable
-        ]
+                {'account_code': get_system_account_code('Accounts Receivable'), 'debit': round(inv.total, 2), 'credit': 0},
+                {'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': round(inv.total - inv.vat, 2)},
+                {'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': round(inv.vat, 2)},
+            ]
+        
         je = JournalEntry(description=f'AR Invoice #{inv.id}', entries_json=json.dumps(je_lines))
         db.session.add(je)
         log_action(f'Created AR Invoice #{inv.id} for ₱{inv.total:,.2f}.')
@@ -117,10 +119,10 @@ def ap_invoices():
         db.session.flush()
 
         je_lines = [
-            {'account_code': '120', 'debit': round(inv.total - inv.vat, 2), 'credit': 0}, # 120: Inventory
-            {'account_code': '602', 'debit': round(inv.vat, 2), 'credit': 0},          # 602: VAT Input
-            {'account_code': '201', 'debit': 0, 'credit': round(inv.total, 2)},        # 201: Accounts Payable
-        ]
+                {'account_code': get_system_account_code('Inventory'), 'debit': round(inv.total - inv.vat, 2), 'credit': 0},
+                {'account_code': get_system_account_code('VAT Input'), 'debit': round(inv.vat, 2), 'credit': 0},
+                {'account_code': get_system_account_code('Accounts Payable'), 'debit': 0, 'credit': round(inv.total, 2)},
+            ]
         je = JournalEntry(description=f'AP Invoice #{inv.id}', entries_json=json.dumps(je_lines))
         db.session.add(je)
         log_action(f'Created AP Invoice #{inv.id} for ₱{inv.total:,.2f}.')
@@ -166,10 +168,10 @@ def record_payment():
             
         # JE: Debit Cash, Debit CWT, Credit Accounts Receivable
         je_lines = [
-            {'account_code': '101', 'debit': round(amount, 2), 'credit': 0},         # 101: Cash
-            {'account_code': '121', 'debit': round(wht_amount, 2), 'credit': 0},      # 121: Creditable Withholding Tax
-            {'account_code': '110', 'debit': 0, 'credit': round(amount + wht_amount, 2)} # 110: Accounts Receivable
-        ]
+                {'account_code': get_system_account_code('Cash'), 'debit': round(amount, 2), 'credit': 0},
+                {'account_code': get_system_account_code('Creditable Withholding Tax'), 'debit': round(wht_amount, 2), 'credit': 0},
+                {'account_code': get_system_account_code('Accounts Receivable'), 'debit': 0, 'credit': round(amount + wht_amount, 2)}
+            ]
         
     elif ref_type == 'AP':
         inv = APInvoice.query.get(ref_id)
@@ -178,9 +180,9 @@ def record_payment():
             inv.status = 'Paid' if inv.paid >= inv.total else 'Partially Paid'
         # JE: Debit Accounts Payable, Credit Cash
         je_lines = [
-            {'account_code': '201', 'debit': round(amount, 2), 'credit': 0}, # 201: Accounts Payable
-            {'account_code': '101', 'debit': 0, 'credit': round(amount, 2)}  # 101: Cash
-        ]
+                {'account_code': get_system_account_code('Accounts Payable'), 'debit': round(amount, 2), 'credit': 0},
+                {'account_code': get_system_account_code('Cash'), 'debit': 0, 'credit': round(amount, 2)}
+            ]
     else:
         flash('Unknown ref type'); db.session.rollback(); return redirect(url_for('ar_ap.customers'))
 
@@ -250,10 +252,10 @@ def credit_memos():
 
         # Journal Entry (This is correct for Sales Returns)
         je_lines = [
-            {'account_code': '405', 'debit': amount_net, 'credit': 0},      # 405: Sales Returns
-            {'account_code': '601', 'debit': vat, 'credit': 0},            # 601: VAT Payable (Debit to reduce)
-            {'account_code': '110', 'debit': 0, 'credit': total_amount}     # 110: Accounts Receivable
-        ]
+                {'account_code': get_system_account_code('Sales Returns'), 'debit': amount_net, 'credit': 0},
+                {'account_code': get_system_account_code('VAT Payable'), 'debit': vat, 'credit': 0},
+                {'account_code': get_system_account_code('Accounts Receivable'), 'debit': 0, 'credit': total_amount}
+            ]
         je = JournalEntry(description=f'Credit Memo #{cm.id} for {reason}', entries_json=json.dumps(je_lines))
         db.session.add(je)
         log_action(f'Created Credit Memo #{cm.id} for ₱{cm.total_amount:,.2f} (Reason: {reason}).')

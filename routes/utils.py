@@ -1,6 +1,7 @@
-from flask import request
+from flask import request, abort
 from flask_login import current_user
-from models import db, AuditLog
+from models import db, AuditLog, Account
+from functools import lru_cache
 
 
 def paginate_query(query, per_page=20):
@@ -23,4 +24,26 @@ def log_action(action_description, user=None):
         ip_address=request.remote_addr
     )
     db.session.add(log)
-    db.session.commit()
+    # This commit is handled by the route's final commit.
+    # db.session.commit()
+    # --- FIX: Let the route handle the commit ---
+    # We should add to the session, but let the calling route
+    # commit the transaction as a whole.
+    db.session.add(log)
+
+
+# --- NEW FUNCTION TO REMOVE MAGIC NUMBERS ---
+@lru_cache(maxsize=None) # Caches results for high performance
+def get_system_account_code(name):
+    """
+    Fetches the account code for a critical system account by its name.
+    Caches the result to avoid database lookups on every transaction.
+    If the account is not found, it will abort the request
+    because the system cannot proceed without it.
+    """
+    account = Account.query.filter_by(name=name).first()
+    if not account:
+        # Abort with a 500 error. The frontend will see this.
+        # This is critical to stop a bad transaction.
+        abort(500, f"Critical system account '{name}' not found. Please configure it in the Chart of Accounts.")
+    return account.code
