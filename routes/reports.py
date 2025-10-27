@@ -802,4 +802,136 @@ def aggregate_account_balances(start_date=None, end_date=None):
     return dict(agg)
 
 
+@reports_bp.route('/general-ledger')
+@login_required
+@role_required('Admin', 'Accountant')
+def general_ledger():
+    # --- NEW: Get dates from URL ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
 
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+    
+    # --- MODIFIED: Pass dates to the aggregator ---
+    # The aggregator is designed to work with dates now.
+    agg = aggregate_account_balances(start_date, end_date)
+    
+    gl_data = []
+    
+    # This logic remains the same (using Trial Balance rules to show the net effect)
+    for acc_code, balance in agg.items():
+        acc_details = Account.query.filter_by(code=acc_code).first()
+        if not acc_details:
+            continue
+
+        is_debit_account = acc_details.type in ['Asset', 'Expense']
+        
+        if is_debit_account:
+            # Positive balance is net Debit, Negative balance is net Credit
+            final_debit = balance if balance >= 0 else 0.0
+            final_credit = abs(balance) if balance < 0 else 0.0
+            balance_type = 'Debit'
+        else:
+            # Negative balance is net Credit, Positive balance is net Debit
+            final_debit = abs(balance) if balance > 0 else 0.0
+            final_credit = abs(balance) if balance <= 0 else 0.0
+            balance_type = 'Credit'
+
+        gl_data.append({
+            'account': f"{acc_code} - {acc_details.name}",
+            'debit': final_debit, 
+            'credit': final_credit,
+            'balance': abs(balance),
+            'balance_type': balance_type
+        })
+        
+    gl_data.sort(key=lambda x: x['account']) # Sort by account name/code
+    
+    # --- MODIFIED: Pass dates to the template ---
+    return render_template('general_ledger.html', 
+                           gl_data=gl_data,
+                           start_date=start_date_str, 
+                           end_date=end_date_str)
+
+
+@reports_bp.route('/export/general-ledger')
+@login_required
+@role_required('Admin', 'Accountant')
+def export_general_ledger():
+    """Exports the General Ledger Summary to CSV."""
+    
+    # --- NEW: Get dates from URL ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+    start_date = parse_date(start_date_str)
+    end_date = parse_date(end_date_str)
+
+    # --- MODIFIED: Pass dates to the aggregator ---
+    agg = aggregate_account_balances(start_date, end_date)
+    
+    gl_data = []
+    
+    # This logic remains the same
+    for acc_code, balance in agg.items():
+        acc_details = Account.query.filter_by(code=acc_code).first()
+        if not acc_details:
+            continue
+
+        is_debit_account = acc_details.type in ['Asset', 'Expense']
+        
+        if is_debit_account:
+            final_debit = balance if balance >= 0 else 0.0
+            final_credit = abs(balance) if balance < 0 else 0.0 
+            balance_type = 'Debit'
+        else:
+            final_debit = abs(balance) if balance > 0 else 0.0
+            final_credit = abs(balance) if balance <= 0 else 0.0
+            balance_type = 'Credit'
+
+        gl_data.append({
+            'account': f"{acc_code} - {acc_details.name}",
+            'debit': final_debit, 
+            'credit': final_credit,
+            'balance': abs(balance),
+            'balance_type': balance_type
+        })
+        
+    gl_data.sort(key=lambda x: x['account'])
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # --- NEW: Add date range to the CSV header ---
+    date_range_label = f"For the period {start_date_str} to {end_date_str}"
+    if not start_date_str or not end_date_str:
+        date_range_label = "For All Time (Current Balances)" # Fallback label
+        
+    writer.writerow(["General Ledger Summary", ""])
+    writer.writerow([date_range_label, ""])
+    writer.writerow([])
+    # --- END NEW ---
+    
+    writer.writerow(["Account", "Net Debits (₱)", "Net Credits (₱)", "Balance (₱)", "Balance Type"])
+    total_debits = 0.0
+    total_credits = 0.0
+    
+    for row in gl_data:
+        total_debits += row['debit']
+        total_credits += row['credit']
+        writer.writerow([
+            row['account'], 
+            f"{row['debit']:.2f}", 
+            f"{row['credit']:.2f}", 
+            f"{row['balance']:.2f}", 
+            row['balance_type']
+        ])
+    
+    writer.writerow([])
+    writer.writerow(["TOTALS (Net Balances)", f"{total_debits:.2f}", f"{total_credits:.2f}", "", ""])
+
+    output.seek(0)
+    # --- NEW: Include date range in the filename for better file management ---
+    date_suffix = f"{start_date_str.replace('-', '')}_{end_date_str.replace('-', '')}" if start_date_str and end_date_str else datetime.now().strftime('%Y%m%d')
+    filename = f"general_ledger_summary_{date_suffix}.csv"
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})

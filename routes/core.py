@@ -307,11 +307,12 @@ def inventory_bulk_add():
             total_value = 0.0
             errors = []
 
+            # Get account codes *before* the loop
             try:
                 inventory_code = get_system_account_code('Inventory')
                 equity_code = get_system_account_code('Opening Balance Equity')
             except Exception as e:
-                flash(f'An error occurred: {str(e)}', 'danger')
+                flash(f'An error occurred finding system accounts: {str(e)}', 'danger')
                 return redirect(request.url)
             
             for row in csv_reader:
@@ -343,13 +344,12 @@ def inventory_bulk_add():
                         quantity=quantity
                     )
                     db.session.add(new_prod)
-                    db.session.flush()
+                    # --- REMOVED: db.session.flush() ---
 
                     if quantity > 0 and cost_price > 0:
                         initial_value = round(quantity * cost_price, 2)
                         total_value += initial_value
                         
-                        # 120: Inventory, 302: Opening Balance Equity
                         je_lines = [
                             {'account_code': inventory_code, 'debit': initial_value, 'credit': 0},
                             {'account_code': equity_code, 'debit': 0, 'credit': initial_value}
@@ -360,17 +360,21 @@ def inventory_bulk_add():
                         )
                         db.session.add(je)
                     
+                    # --- FIX: Commit after EACH successful row ---
+                    # This saves the product and JE for this row immediately.
+                    db.session.commit()
+                    
                     products_added += 1
 
                 except ValueError:
-                    db.session.rollback()
+                    db.session.rollback() # Now this only rolls back the current bad row
                     errors.append(f"Invalid number format for row: {','.join(row)}. Skipped.")
                 except Exception as e:
-                    db.session.rollback()
+                    db.session.rollback() # This also only rolls back the current bad row
                     errors.append(f"Error on row {','.join(row)}: {str(e)}. Skipped.")
 
-            # --- Commit all good entries at the end ---
-            db.session.commit()
+            # --- FIX: REMOVED the final commit from here ---
+            # db.session.commit() 
             
             flash(f'Successfully added {products_added} products.', 'success')
             if total_value > 0:
@@ -389,7 +393,6 @@ def inventory_bulk_add():
             return redirect(request.url)
 
     # GET request just shows the template
-    # We must create this template file.
     return render_template('inventory_bulk_add.html')
 
 
@@ -621,8 +624,10 @@ def purchases():
 @role_required('Admin', 'Accountant') # Protect this action
 def cancel_purchase(purchase_id):
     """
-    Cancels a purchase by creating a reversing journal entry.
-    This does NOT delete the record, ensuring compliance.
+    Cancels a purchase by:
+    1. Creating a reversing journal entry.
+    2. Reversing the stock quantity adjustments.
+    3. Marking the purchase as 'Canceled'.
     """
     purchase = Purchase.query.get_or_404(purchase_id)
 
@@ -638,16 +643,7 @@ def cancel_purchase(purchase_id):
         total = purchase.total
 
         # 3. Create the reversing journal entry
-        # Original JE was:
-        #   Debit:   Inventory (120) [net]
-        #   Debit:   VAT Input (602) [vat]
-        #   Credit:  Accounts Payable (201) [total]
-        #
-        # Reversing JE is:
-        #   Debit:   Accounts Payable (201) [total]
-        #   Credit:  Inventory (120) [net]
-        #   Credit:  VAT Input (602) [vat]
-        
+        # (This part is the same as your original code)
         journal_lines = [
             {"account_code": get_system_account_code('Accounts Payable'), "debit": total, "credit": 0},
             {"account_code": get_system_account_code('Inventory'), "debit": 0, "credit": total_net},
@@ -659,14 +655,23 @@ def cancel_purchase(purchase_id):
         )
         db.session.add(journal)
 
-        # 4. Update the purchase status
+        # --- 4. NEW: Reverse Product Quantities ---
+        # We do not touch the average cost_price.
+        for item in purchase.items:
+            product = Product.query.get(item.product_id)
+            if product:
+                # Subtract the quantity from the product's stock
+                product.quantity = max(0, product.quantity - item.qty)
+        # --- End of New Block ---
+
+        # 5. Update the purchase status
         purchase.status = 'Canceled'
         
-        # 5. Log this compliant action
-        log_action(f'Canceled Purchase #{purchase.id} (Supplier: {purchase.supplier}, Total: ₱{purchase.total:,.2f}). Reversing JE created.')
+        # 6. Log this compliant action
+        log_action(f'Canceled Purchase #{purchase.id} (Supplier: {purchase.supplier}, Total: ₱{purchase.total:,.2f}). Reversing JE and stock adjustment created.')
         
         db.session.commit()
-        flash(f'Purchase #{purchase.id} has been canceled and a reversing journal entry was posted.', 'success')
+        flash(f'Purchase #{purchase.id} has been canceled. Journal entry posted and stock levels adjusted.', 'success')
 
     except Exception as e:
         db.session.rollback()
