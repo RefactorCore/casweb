@@ -203,6 +203,16 @@
     <div class="pos-cart">
       <h5><i class="bi bi-receipt me-1"></i>Current Sale</h5>
       <div class="cart-list" id="cartList"></div>
+      <div class="mb-2">
+          <h6 class="mb-1" style="font-size: 0.9rem;">Document Type:</h6>
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="doc_type_select" id="doc_type_or" value="OR" checked>
+            <label class="form-check-label" for="doc_type_or" style="font-size: 0.9rem;">Official Receipt</label>
+          </div>
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="doc_type_select" id="doc_type_si" value="SI">
+            <label class="form-check-label" for="doc_type_si" style="font-size: 0.9rem;">Sales Invoice</label>
+          </div>
       <div>
         <h6>Total: ₱<span id="total">0.00</span></h6>
         <button id="checkoutBtn" class="btn btn-primary w-100 mt-2">
@@ -444,10 +454,15 @@ document.addEventListener("DOMContentLoaded", function() {
       return;
     }
 
+    // --- ▼▼▼ ADD THIS LINE ▼▼▼ ---
+    // Get the value from the new radio buttons ('OR' or 'SI')
+    const selectedDocType = document.querySelector('input[name="doc_type_select"]:checked').value;
+
     const response = await fetch('/api/sale', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: cart, doc_type: 'OR' }) 
+      // --- ▼▼▼ UPDATE THIS LINE ▼▼▼ ---
+      body: JSON.stringify({ items: cart, doc_type: selectedDocType }) 
     });
 
     const data = await response.json();

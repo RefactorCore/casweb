@@ -2,16 +2,40 @@
 {% block content %}
 
 <div class="container mt-4">
-    <a href="{{ url_for('core.reports') }}" class="btn btn-outline-secondary btn-sm mb-3">
-        &larr; Back to Reports List
-    </a>
     <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="fw-bold text-primary mb-0">📚 General Ledger Summary</h2>
-        <a href="{{ url_for('core.export_general_ledger') }}" class="btn btn-success">
+        <h2 class="fw-bold text-primary mb-0">📚 General Ledger</h2>
+        <a href="{{ url_for('reports.export_general_ledger', start_date=start_date, end_date=end_date) }}" class="btn btn-success">
             ⬇ Export CSV
         </a>
     </div>
-    <p class="text-muted">Aggregated debit and credit totals for all accounts.</p>
+    
+    <form method="GET" class="row g-3 align-items-center mb-3">
+        <div class="col-auto">
+            <label for="start_date" class="col-form-label">Start Date:</label>
+        </div>
+        <div class="col-auto">
+            <input type="date" id="start_date" name="start_date" class="form-control" value="{{ start_date or '' }}">
+        </div>
+        <div class="col-auto">
+            <label for="end_date" class="col-form-label">End Date:</label>
+        </div>
+        <div class="col-auto">
+            <input type="date" id="end_date" name="end_date" class="form-control" value="{{ end_date or '' }}">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary">Filter</button>
+        </div>
+        {% if start_date or end_date %}
+        <div class="col-auto">
+            <a href="{{ url_for('reports.general_ledger') }}" class="btn btn-outline-danger">Clear Filter</a>
+        </div>
+        {% endif %}
+    </form>
+    <p class="text-muted">
+        Aggregated net balances for the period 
+        <span class="fw-bold">{{ start_date or 'Beginning of Time' }}</span> to 
+        <span class="fw-bold">{{ end_date or 'Current Date' }}</span>.
+    </p>
 
     <div class="card shadow-sm">
         <div class="card-body">
@@ -19,8 +43,8 @@
                 <thead class="table-light">
                     <tr>
                         <th>Account</th>
-                        <th class="text-end">Total Debits (₱)</th>
-                        <th class="text-end">Total Credits (₱)</th>
+                        <th class="text-end">Net Debits (₱)</th>
+                        <th class="text-end">Net Credits (₱)</th>
                         <th class="text-end">Balance (₱)</th>
                         <th class="text-center">Balance Type</th>
                     </tr>

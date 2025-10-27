@@ -113,6 +113,7 @@
       </a>
 
       {% set financial_reports_active = request.endpoint in [
+          'reports.general_ledger',
           'reports.trial_balance', 
           'reports.income_statement', 
           'reports.balance_sheet'
@@ -121,6 +122,9 @@
         <i class="bi bi-file-earmark-bar-graph me-2"></i> Financial Reports
       </a>
       <div class="collapse {% if financial_reports_active %}show{% endif %}" id="financialReportsSubmenu">
+          <a href="{{ url_for('reports.general_ledger') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.general_ledger' %}active{% endif %}">
+            - General Ledger
+          </a>
           <a href="{{ url_for('reports.trial_balance') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.trial_balance' %}active{% endif %}">
             - Trial Balance
           </a>
