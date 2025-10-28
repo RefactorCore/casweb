@@ -71,22 +71,30 @@ def ar_invoices():
         if total <= 0:
             flash('Invoice total must be > 0')
             return redirect(url_for('ar_ap.ar_invoices'))
-        inv = ARInvoice(customer_id=cust_id, total=round(total, 2), vat=round(vat, 2))
-        db.session.add(inv)
-        db.session.flush()
 
-        # Journal entry
-        je_lines = [
-                {'account_code': get_system_account_code('Accounts Receivable'), 'debit': round(inv.total, 2), 'credit': 0},
-                {'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': round(inv.total - inv.vat, 2)},
-                {'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': round(inv.vat, 2)},
-            ]
+        try:
+            inv = ARInvoice(customer_id=cust_id, total=round(total, 2), vat=round(vat, 2))
+            db.session.add(inv)
+            db.session.flush()
+
+            # Journal entry
+            je_lines = [
+                    {'account_code': get_system_account_code('Accounts Receivable'), 'debit': round(inv.total, 2), 'credit': 0},
+                    {'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': round(inv.total - inv.vat, 2)},
+                    {'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': round(inv.vat, 2)},
+                ]
+            
+            je = JournalEntry(description=f'AR Invoice #{inv.id}', entries_json=json.dumps(je_lines))
+            db.session.add(je)
+            log_action(f'Created AR Invoice #{inv.id} for ₱{inv.total:,.2f}.')
+            db.session.commit()
+            flash('AR Invoice created and journal entry recorded.')
         
-        je = JournalEntry(description=f'AR Invoice #{inv.id}', entries_json=json.dumps(je_lines))
-        db.session.add(je)
-        log_action(f'Created AR Invoice #{inv.id} for ₱{inv.total:,.2f}.')
-        db.session.commit()
-        flash('AR Invoice created and journal entry recorded.')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'An error occurred: {str(e)}', 'danger')
+        # --- END ADD ---
+
         return redirect(url_for('ar_ap.ar_invoices'))
 
     invoices = ARInvoice.query.order_by(ARInvoice.date.desc()).all()
@@ -114,20 +122,28 @@ def ap_invoices():
         if total <= 0:
             flash('Invoice total must be > 0')
             return redirect(url_for('ar_ap.ap_invoices'))
-        inv = APInvoice(supplier_id=sup_id, total=round(total, 2), vat=round(vat, 2))
-        db.session.add(inv)
-        db.session.flush()
 
-        je_lines = [
-                {'account_code': get_system_account_code('Inventory'), 'debit': round(inv.total - inv.vat, 2), 'credit': 0},
-                {'account_code': get_system_account_code('VAT Input'), 'debit': round(inv.vat, 2), 'credit': 0},
-                {'account_code': get_system_account_code('Accounts Payable'), 'debit': 0, 'credit': round(inv.total, 2)},
-            ]
-        je = JournalEntry(description=f'AP Invoice #{inv.id}', entries_json=json.dumps(je_lines))
-        db.session.add(je)
-        log_action(f'Created AP Invoice #{inv.id} for ₱{inv.total:,.2f}.')
-        db.session.commit()
-        flash('AP Invoice created and journal entry recorded.')
+        try:
+            inv = APInvoice(supplier_id=sup_id, total=round(total, 2), vat=round(vat, 2))
+            db.session.add(inv)
+            db.session.flush()
+
+            je_lines = [
+                    {'account_code': get_system_account_code('Inventory'), 'debit': round(inv.total - inv.vat, 2), 'credit': 0},
+                    {'account_code': get_system_account_code('VAT Input'), 'debit': round(inv.vat, 2), 'credit': 0},
+                    {'account_code': get_system_account_code('Accounts Payable'), 'debit': 0, 'credit': round(inv.total, 2)},
+                ]
+            je = JournalEntry(description=f'AP Invoice #{inv.id}', entries_json=json.dumps(je_lines))
+            db.session.add(je)
+            log_action(f'Created AP Invoice #{inv.id} for ₱{inv.total:,.2f}.')
+            db.session.commit()
+            flash('AP Invoice created and journal entry recorded.')
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f'An error occurred: {str(e)}', 'danger')
+        # --- END ADD ---
+
         return redirect(url_for('ar_ap.ap_invoices'))
 
     invoices = APInvoice.query.order_by(APInvoice.date.desc()).all()

@@ -1193,10 +1193,12 @@ def login():
         if user and pbkdf2_sha256.verify(password, user.password_hash):
             login_user(user)
             log_action(f'User logged in successfully.', user=user)
+            db.session.commit()
             flash('Logged in successfully!', 'success')
             return redirect(url_for('core.index'))
         else:
             log_action(f'Failed login attempt for username: {username}.')
+            db.session.commit()
             flash('Invalid username or password.', 'danger')
 
     return render_template('login.html')

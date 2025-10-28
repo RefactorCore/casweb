@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, request, abort, Response
 from flask_login import login_required
 # Add CompanyProfile, Customer, Supplier, CreditMemo
-from models import db, JournalEntry, Account, Sale, Purchase, Product, ARInvoice, APInvoice, CompanyProfile, Customer, Supplier, CreditMemo, Payment, SaleItem, PurchaseItem
+from models import db, JournalEntry, Account, Sale, Purchase, Product, ARInvoice, APInvoice, CompanyProfile, Customer, Supplier, CreditMemo, Payment, SaleItem, PurchaseItem, StockAdjustment
 from collections import defaultdict
 import json
 from sqlalchemy import func, extract, cast, Date
@@ -283,6 +283,13 @@ def vat_return():
         extract('year', ARInvoice.date) == year,
         extract('month', ARInvoice.date) == month_num
     ).all()
+
+    # --- ADD THIS QUERY ---
+    cash_sales_in_month = Sale.query.filter(
+        extract('year', Sale.created_at) == year,
+        extract('month', Sale.created_at) == month_num
+    ).all()
+    # --- END ADD ---
     
     # Adjustments to Output Tax (from Credit Memos)
     returns_in_month = CreditMemo.query.filter(
@@ -290,8 +297,12 @@ def vat_return():
         extract('month', CreditMemo.date) == month_num
     ).all()
 
-    total_sales_net = sum(s.total - s.vat for s in sales_in_month)
-    total_output_vat = sum(s.vat for s in sales_in_month)
+    # --- UPDATE THESE TWO LINES ---
+    total_sales_net = sum(s.total - s.vat for s in sales_in_month) + \
+                      sum(s.total - s.vat for s in cash_sales_in_month)
+    total_output_vat = sum(s.vat for s in sales_in_month) + \
+                       sum(s.vat for s in cash_sales_in_month)
+    # --- END UPDATE ---
     
     total_returns_net = sum(cm.amount_net for cm in returns_in_month)
     total_returns_vat = sum(cm.vat for cm in returns_in_month)
@@ -301,8 +312,20 @@ def vat_return():
         extract('year', APInvoice.date) == year,
         extract('month', APInvoice.date) == month_num
     ).all()
-    total_purchases_net = sum(p.total - p.vat for p in purchases_in_month)
-    total_input_vat = sum(p.vat for p in purchases_in_month)
+
+    # --- ADD THIS QUERY ---
+    cash_purchases_in_month = Purchase.query.filter(
+        extract('year', Purchase.created_at) == year,
+        extract('month', Purchase.created_at) == month_num
+    ).all()
+    # --- END ADD ---
+    
+    # --- UPDATE THESE TWO LINES ---
+    total_purchases_net = sum(p.total - p.vat for p in purchases_in_month) + \
+                          sum(p.total - p.vat for p in cash_purchases_in_month)
+    total_input_vat = sum(p.vat for p in purchases_in_month) + \
+                      sum(p.vat for p in cash_purchases_in_month)
+    # --- END UPDATE ---
     
     # Calculation
     net_sales = total_sales_net - total_returns_net
@@ -476,6 +499,10 @@ def stock_card(product_id):
     
     sales = SaleItem.query.filter_by(product_id=product.id).all()
     purchases = PurchaseItem.query.filter_by(product_id=product.id).all()
+
+    # --- ADD THIS QUERY ---
+    adjustments = StockAdjustment.query.filter_by(product_id=product.id).all()
+    # --- END ADD ---
     
     # Combine and sort transactions by date
     transactions = []
@@ -497,16 +524,60 @@ def stock_card(product_id):
             'qty_out': 0,
             'cost': p.unit_cost
         })
+
+    # --- ADD THIS LOOP ---
+    for adj in adjustments:
+         transactions.append({
+            'date': adj.created_at,
+            'type': f'Adjustment ({adj.reason})',
+            'ref_id': adj.id,
+            'qty_in': adj.quantity_changed if adj.quantity_changed > 0 else 0,
+            'qty_out': abs(adj.quantity_changed) if adj.quantity_changed < 0 else 0,
+            'cost': product.cost_price 
+        })
+    # --- END ADD ---
         
     transactions.sort(key=lambda x: x['date'])
     
-    # Calculate running balance
-    running_balance = 0
+    # --- START OF FIX ---
+    # Calculate the opening balance by working backward from the current quantity
+    current_quantity = product.quantity
+    
+    total_sales_qty = sum(s.qty for s in sales)
+    total_purchase_qty = sum(p.qty for p in purchases)
+    total_adjustment_qty = sum(adj.quantity_changed for adj in adjustments)
+    
+    # Opening Balance = Current Qty - (all INs) + (all OUTs)
+    opening_balance = current_quantity - total_purchase_qty - total_adjustment_qty + total_sales_qty
+    
+    # Set the starting running_balance to the calculated opening balance
+    running_balance = opening_balance
+
+    # Create a new list to hold transactions *with* the opening balance
+    report_transactions = []
+    
+    # Add the Opening Balance as the first row in the report
+    # We find the earliest transaction date (or use today) to put it first
+    first_transaction_date = transactions[0]['date'] if transactions else datetime.utcnow()
+    report_transactions.append({
+        'date': first_transaction_date - timedelta(seconds=1), # Ensure it's the very first entry
+        'type': 'Opening Balance',
+        'ref_id': 'N/A',
+        'qty_in': opening_balance if opening_balance > 0 else 0,
+        'qty_out': abs(opening_balance) if opening_balance < 0 else 0,
+        'cost': product.cost_price,
+        'balance': running_balance
+    })
+    
+    # Now, calculate the running balance for all other transactions
     for t in transactions:
         running_balance += t['qty_in'] - t['qty_out']
         t['balance'] = running_balance
+        report_transactions.append(t)
+    # --- END OF FIX ---
         
-    return render_template('stock_card.html', product=product, transactions=transactions)
+    return render_template('stock_card.html', product=product, 
+                           transactions=report_transactions)
 
 
 @reports_bp.route('/export/balance-sheet')
