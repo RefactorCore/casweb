@@ -100,7 +100,7 @@
       {% if current_user.role in ['Admin', 'Accountant'] %}
       
       <hr class="border-light my-2">
-      <h6 class="text-white-50 px-3 mt-2 mb-1" style="font-size: 0.8rem;">ACCOUNTING</h6>
+      <h6 class="text-white-50 px-3 mt-2 mb-1" style="font-size: 0.8rem;">ACCOUNTING AND REPORTS</h6>
 
       <a href="{{ url_for('core.journal_entries') }}" class="{% if '/journal-entries' in request.path %}active{% endif %}">
         <i class="bi bi-journal-text me-2"></i> Journals
