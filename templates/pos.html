@@ -73,93 +73,93 @@
     white-space: pre-wrap;
   }
 
-/* --- ADD THIS CSS INSIDE YOUR <style> TAG --- */
+  /* --- ADD THIS CSS INSIDE YOUR <style> TAG --- */
 
-/* Style for the receipt popup */
-#receiptModal .modal-dialog {
-  max-width: 450px; /* A bit wider for the receipt */
-}
-#receiptModal .modal-content {
-  border: 2px solid #000;
-}
-#receiptModal .modal-header {
-  border-bottom: 2px solid #000;
-  padding: 0.75rem 1.25rem;
-}
-#receiptModal .modal-title {
-  font-weight: bold;
-  text-transform: uppercase;
-  font-size: 1.2rem;
-}
+  /* Style for the receipt popup */
+  #receiptModal .modal-dialog {
+    max-width: 450px; /* A bit wider for the receipt */
+  }
+  #receiptModal .modal-content {
+    border: 2px solid #000;
+  }
+  #receiptModal .modal-header {
+    border-bottom: 2px solid #000;
+    padding: 0.75rem 1.25rem;
+  }
+  #receiptModal .modal-title {
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 1.2rem;
+  }
 
-/* This is the main receipt body style */
-#receiptTemplate {
-  font-family: 'Courier New', Courier, monospace;
-  background: #fdfdfa; /* Off-white paper color */
-  border: 1px dashed #999;
-  padding: 15px;
-  font-size: 14px;
-  color: #000;
-}
-#receiptTemplate hr {
-  border-top: 1px dashed #000;
-  margin: 10px 0;
-}
-.receipt-header {
-  text-align: center;
-  margin-bottom: 10px;
-}
-.receipt-header h5 {
-  margin: 0;
-  font-weight: bold;
-  text-transform: uppercase;
-}
-.receipt-header small {
-  font-size: 13px;
-}
-.receipt-field {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 5px;
-  border-bottom: 1px dotted #777;
-}
-.receipt-field strong {
-  margin-right: 10px;
-}
-.receipt-items-header {
-  display: flex;
-  justify-content: space-between;
-  font-weight: bold;
-  border-bottom: 1px solid #000;
-  margin-top: 15px;
-}
-.receipt-item {
-  display: flex;
-  margin-top: 5px;
-}
-.receipt-item .item-name {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.receipt-item .item-qty, .receipt-item .item-total {
-  text-align: right;
-}
-.receipt-item .item-qty { width: 70px; }
-.receipt-item .item-total { width: 90px; }
+  /* This is the main receipt body style */
+  #receiptTemplate {
+    font-family: 'Courier New', Courier, monospace;
+    background: #fdfdfa; /* Off-white paper color */
+    border: 1px dashed #999;
+    padding: 15px;
+    font-size: 14px;
+    color: #000;
+  }
+  #receiptTemplate hr {
+    border-top: 1px dashed #000;
+    margin: 10px 0;
+  }
+  .receipt-header {
+    text-align: center;
+    margin-bottom: 10px;
+  }
+  .receipt-header h5 {
+    margin: 0;
+    font-weight: bold;
+    text-transform: uppercase;
+  }
+  .receipt-header small {
+    font-size: 13px;
+  }
+  .receipt-field {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    border-bottom: 1px dotted #777;
+  }
+  .receipt-field strong {
+    margin-right: 10px;
+  }
+  .receipt-items-header {
+    display: flex;
+    justify-content: space-between;
+    font-weight: bold;
+    border-bottom: 1px solid #000;
+    margin-top: 15px;
+  }
+  .receipt-item {
+    display: flex;
+    margin-top: 5px;
+  }
+  .receipt-item .item-name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .receipt-item .item-qty, .receipt-item .item-total {
+    text-align: right;
+  }
+  .receipt-item .item-qty { width: 70px; }
+  .receipt-item .item-total { width: 90px; }
 
-.receipt-totals {
-  margin-top: 15px;
-}
-.receipt-totals div {
-  display: flex;
-  justify-content: space-between;
-  font-size: 1.1rem;
-  font-weight: bold;
-  margin-bottom: 5px;
-}
-/* --- END OF NEW CSS --- */
+  .receipt-totals {
+    margin-top: 15px;
+  }
+  .receipt-totals div {
+    display: flex;
+    justify-content: space-between;
+    font-size: 1.1rem;
+    font-weight: bold;
+    margin-bottom: 5px;
+  }
+  /* --- END OF NEW CSS --- */
 </style>
 
 <div class="pos-container">
@@ -203,16 +203,10 @@
     <div class="pos-cart">
       <h5><i class="bi bi-receipt me-1"></i>Current Sale</h5>
       <div class="cart-list" id="cartList"></div>
+
+      <!-- Document type removed from UI. System will use 'Invoice' as default document type. -->
       <div class="mb-2">
-          <h6 class="mb-1" style="font-size: 0.9rem;">Document Type:</h6>
-          <div class="form-check form-check-inline">
-            <input class="form-check-input" type="radio" name="doc_type_select" id="doc_type_or" value="OR" checked>
-            <label class="form-check-label" for="doc_type_or" style="font-size: 0.9rem;">Official Receipt</label>
-          </div>
-          <div class="form-check form-check-inline">
-            <input class="form-check-input" type="radio" name="doc_type_select" id="doc_type_si" value="SI">
-            <label class="form-check-label" for="doc_type_si" style="font-size: 0.9rem;">Sales Invoice</label>
-          </div>
+        <h6 class="mb-1" style="font-size: 0.9rem;">Document: <strong>Invoice</strong></h6>
       <div>
         <h6>Total: ₱<span id="total">0.00</span></h6>
         <button id="checkoutBtn" class="btn btn-primary w-100 mt-2">
@@ -454,21 +448,19 @@ document.addEventListener("DOMContentLoaded", function() {
       return;
     }
 
-    // --- ▼▼▼ ADD THIS LINE ▼▼▼ ---
-    // Get the value from the new radio buttons ('OR' or 'SI')
-    const selectedDocType = document.querySelector('input[name="doc_type_select"]:checked').value;
+    // Default document type now fixed to 'Invoice'
+    const selectedDocType = 'Invoice';
 
     const response = await fetch('/api/sale', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // --- ▼▼▼ UPDATE THIS LINE ▼▼▼ ---
       body: JSON.stringify({ items: cart, doc_type: selectedDocType }) 
     });
 
     const data = await response.json();
     if (data.status === 'ok') {
       const change = cash - total;
-      const receipt = generateReceipt(cart, total, cash, change, data.receipt_number, data.vat);
+      const receipt = generateReceipt(cart, total, cash, change, data.receipt_number || data.sale_id, data.vat);
       document.getElementById('receiptTemplate').innerHTML = receipt;
       new bootstrap.Modal(document.getElementById('receiptModal')).show();
       
@@ -511,7 +503,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
     // Start building the HTML string
     let html = `<div class="receipt-header">`;
-    html += `<h5>${receiptNumber || 'RECEIPT'}</h5>`; // Uses the OR/SI number
+    html += `<h5>${receiptNumber || 'INVOICE'}</h5>`; // Use INVOICE label by default
     html += `<small>Date: ${dateStr} ${timeStr}</small>`;
     html += `</div>`;
     
@@ -543,16 +535,12 @@ document.addEventListener("DOMContentLoaded", function() {
     html += `<hr>`;
     
     // Totals
-    // Totals
     // Calculate VATable Sales (Total minus VAT)
     const vatableSales = total - (vatAmount || 0); 
     
     html += `<div class="receipt-totals">`;
-    
-    // --- ADD THESE NEW LINES ---
     html += `<div style="font-weight: normal; font-size: 1rem;"><span>VATable Sales:</span> <span>₱${vatableSales.toFixed(2)}</span></div>`;
     html += `<div style="font-weight: normal; font-size: 1rem;"><span>VAT (12%):</span> <span>₱${(vatAmount || 0).toFixed(2)}</span></div>`;
-    // --- END OF NEW LINES ---
     
     html += `<div><span>TOTAL:</span> <span>₱${total.toFixed(2)}</span></div>`;
     html += `<div><span>CASH:</span> <span>₱${cash.toFixed(2)}</span></div>`;
