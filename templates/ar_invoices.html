@@ -38,7 +38,7 @@
                             {% if inv.status != 'Paid' %}
                             <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#recordPaymentModal" 
                                 onclick="setPaymentDetails('AR', {{ inv.id }}, {{ balance }})">
-                                Pay
+                                Collect
                             </button>
                             {% endif %}
                         </td>
