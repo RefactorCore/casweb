@@ -10,7 +10,7 @@
 
   <form method="post" id="purchase-form" class="card shadow-sm p-4">
     <div class="row mb-3">
-      <div class="col-md-6">
+      <div class="col-md-5">
         <label class="form-label fw-semibold">Supplier</label>
         <input id="supplier" name="supplier" class="form-control" placeholder="Search or type new supplier..." list="supplier-list" required>
         <datalist id="supplier-list">
@@ -23,7 +23,17 @@
         <label class="form-label fw-semibold">Purchase Date</label>
         <input type="date" name="date" class="form-control" value="{{ today }}">
       </div>
-      <div class="col-md-3 d-flex align-items-end justify-content-end">
+
+      <!-- NEW: Purchase-level Vatable toggle -->
+      <div class="col-md-2">
+        <label class="form-label fw-semibold">Vatable</label>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="is_vatable" id="purchaseIsVatable" checked>
+          <label class="form-check-label" for="purchaseIsVatable">Apply VAT (12%)</label>
+        </div>
+      </div>
+
+      <div class="col-md-2 d-flex align-items-end justify-content-end">
         <button type="submit" class="btn btn-success px-4">💾 Record Purchase</button>
       </div>
     </div>
@@ -90,8 +100,27 @@
 const VAT_RATE = 0.12;
 let items = [];
 
-// This render function is still perfect, no changes needed.
+/**
+ * Recalculate per-line VAT/net/line_total for all items depending on
+ * whether the purchase is marked vatable. Called on toggle and before render.
+ */
+function recalcItems() {
+  const purchaseIsVatable = document.getElementById('purchaseIsVatable').checked;
+  for (const it of items) {
+    // net (line_net) is always qty * unit_cost
+    it.net = Math.round((it.qty * it.unit_cost) * 100) / 100;
+    if (purchaseIsVatable) {
+      it.vat = Math.round(it.net * VAT_RATE * 100) / 100;
+    } else {
+      it.vat = 0.00;
+    }
+    it.line_total = Math.round((it.net + it.vat) * 100) / 100;
+  }
+}
+
+/* render function updated to call recalcItems first */
 function render() {
+  recalcItems(); // ensure items reflect current vatable flag
   const tbody = document.querySelector('#p-items tbody');
   tbody.innerHTML = '';
   let subtotal = 0, vat_total = 0;
@@ -119,85 +148,81 @@ function render() {
   document.getElementById('items_json').value = JSON.stringify(items);
 }
 
-// This remove function is also perfect, no changes needed.
 function removeItem(i) {
   items.splice(i, 1);
   render();
 }
 
-
-// --- ADD THIS NEW BLOCK to initialize TomSelect ---
-  new TomSelect('#product-select', {
-    create: false, // Don't allow creating new options
-    sortField: { field: "text", direction: "asc" },
-    
-    // This `onChange` replaces the event listener we just deleted
-    onChange: (sku) => {
-      const sel = document.getElementById('product-select'); // Get the original select
-      if (!sku) {
-        // Clear fields if "select..." is chosen
-        document.getElementById('p-sku').value = '';
-        document.getElementById('p-name').value = '';
-        document.getElementById('p-unit').value = '0.00';
-        return;
-      }
-      
-      const opt = sel.options[sel.selectedIndex];
-      const name = opt.dataset.name;
-      const cost = parseFloat(opt.dataset.cost) || 0.00;
-      
-      document.getElementById('p-sku').value = sku;
-      document.getElementById('p-name').value = name;
-      document.getElementById('p-unit').value = cost.toFixed(2);
+// Initialize TomSelect for product select
+new TomSelect('#product-select', {
+  create: false, // Don't allow creating new options
+  sortField: { field: "text", direction: "asc" },
+  onChange: (sku) => {
+    const sel = document.getElementById('product-select'); // Get the original select
+    if (!sku) {
+      document.getElementById('p-sku').value = '';
+      document.getElementById('p-name').value = '';
+      document.getElementById('p-unit').value = '0.00';
+      return;
     }
-  });
-// --- END OF NEW BLOCK ---
+    const opt = sel.options[sel.selectedIndex];
+    const name = opt.dataset.name;
+    const cost = parseFloat(opt.dataset.cost) || 0.00;
+    document.getElementById('p-sku').value = sku;
+    document.getElementById('p-name').value = name;
+    document.getElementById('p-unit').value = cost.toFixed(2);
+  }
+});
 
-
-// --- MODIFIED: This is the 'Add Item' button click ---
+// Add Item button click: read purchase-level vatable flag and compute VAT accordingly
 document.getElementById('add-p').onclick = (e) => {
-  e.preventDefault(); // Keep this
-  
-  // --- Read from the text inputs, NOT the select box ---
+  e.preventDefault();
+
   const sku = document.getElementById('p-sku').value.trim();
   const name = document.getElementById('p-name').value.trim();
   const qty = parseInt(document.getElementById('p-qty').value) || 0;
   const unit = parseFloat(document.getElementById('p-unit').value) || 0;
 
-  // --- We check the text inputs now ---
   if (!sku || !name || qty <= 0) {
     return alert('SKU, Product Name, and a valid Quantity are required.');
   }
 
-  const net = qty * unit;
-  const vat = Math.round(net * VAT_RATE * 100) / 100;
-  const line_total = net + vat;
+  // Check current purchase vatable flag
+  const purchaseIsVatable = document.getElementById('purchaseIsVatable').checked;
+
+  const net = Math.round(qty * unit * 100) / 100;
+  const vat = purchaseIsVatable ? Math.round(net * VAT_RATE * 100) / 100 : 0.00;
+  const line_total = Math.round((net + vat) * 100) / 100;
 
   items.push({ sku, name, qty, unit_cost: unit, net, vat, line_total });
   render();
 
-  // --- NEW: Clear the inputs for the next item ---
+  // Clear inputs for the next item
   document.getElementById('p-sku').value = '';
   document.getElementById('p-name').value = '';
   document.getElementById('p-qty').value = 1;
   document.getElementById('p-unit').value = '0.00';
-  document.getElementById('product-select').value = ''; // Reset dropdown
-  document.getElementById('p-sku').focus(); // Put cursor back in SKU field
+  document.getElementById('product-select').value = '';
+  document.getElementById('p-sku').focus();
 };
 
+// When purchase-level vatable checkbox changes, recalc item VAT and update totals
+document.getElementById('purchaseIsVatable').addEventListener('change', () => {
+  render();
+});
 
-// --- NEW: This handles the final form submission ---
-// It validates that the cart isn't empty
+// Final form submission: ensure items exist and items_json is updated
 document.getElementById('purchase-form').addEventListener('submit', (e) => {
-    if (items.length === 0) {
-        e.preventDefault(); // Stop the form from submitting
-        alert('Cannot record a purchase with no items. Please add at least one item.');
-        return;
-    }
-    
-    // Update the hidden JSON field with the latest item data
-    // The form will now submit as normal
-    document.getElementById('items_json').value = JSON.stringify(items);
+  if (items.length === 0) {
+    e.preventDefault();
+    alert('Cannot record a purchase with no items. Please add at least one item.');
+    return;
+  }
+
+  // Ensure latest recalculation
+  recalcItems();
+  document.getElementById('items_json').value = JSON.stringify(items);
+  // Allow native form submission to send 'is_vatable' checkbox as well
 });
 </script>
 {% endblock %}

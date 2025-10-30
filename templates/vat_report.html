@@ -35,30 +35,49 @@
         </thead>
         <tbody>
           <tr>
-            <td>Total Input VAT (from all purchases)</td>
-            <td class="text-end text-danger">{{ total_input_vat | money }}</td>
+            <td>Total Input VAT (from all vatable purchases)</td>
+            <td class="text-end text-danger">{{ total_input_vat | default(0) | money }}</td>
           </tr>
           <tr>
-            <td>Total Output VAT (from all sales)</td>
-            <td class="text-end text-success">{{ total_output_vat | money }}</td>
+            <td>Total Output VAT (from all vatable sales)</td>
+            <td class="text-end text-success">{{ total_output_vat | default(0) | money }}</td>
           </tr>
           <tr class="fw-bold table-secondary">
             <td>VAT Payable / (Refund)</td>
             <td class="text-end">
-              {% if vat_payable >= 0 %}
-                <span class="text-danger">{{ vat_payable | money }} (Payable)</span>
+              {% if vat_payable is not none %}
+                {% if vat_payable >= 0 %}
+                  <span class="text-danger">{{ vat_payable | money }} (Payable)</span>
+                {% else %}
+                  <span class="text-success">{{ (vat_payable * -1) | money }} (Refund)</span>
+                {% endif %}
               {% else %}
-                <span class="text-success">{{ (vat_payable * -1) | money }} (Refund)</span>
+                <span class="text-muted">N/A</span>
               {% endif %}
             </td>
           </tr>
+
+          <!-- Non‑VAT summary rows (new) -->
+          <tr class="table-light">
+            <td colspan="2" class="pt-4 pb-2"><strong>Non‑VAT Summary (separate from VAT totals)</strong></td>
+          </tr>
+          <tr>
+            <td>Non‑VAT Sales (Cash + AR)</td>
+            <td class="text-end">{{ total_nonvat_sales | default(0) | money }}</td>
+          </tr>
+          <tr>
+            <td>Non‑VAT Purchases (Cash + AP)</td>
+            <td class="text-end">{{ total_nonvat_purchases | default(0) | money }}</td>
+          </tr>
+
         </tbody>
       </table>
     </div>
   </div>
 
   <p class="mt-4 text-muted">
-    This summary shows your VAT position based on recorded <strong>sales</strong> and <strong>purchases</strong>.
+    This summary shows your VAT position. The VAT totals above include only transactions marked as <strong>vatable</strong>.
+    Transactions marked as <strong>non‑VAT</strong> are excluded from Output/Input VAT calculations and are shown separately below for reporting purposes.
   </p>
 
 </div>

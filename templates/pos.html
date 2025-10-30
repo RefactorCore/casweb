@@ -207,6 +207,13 @@
       <!-- Document type removed from UI. System will use 'Invoice' as default document type. -->
       <div class="mb-2">
         <h6 class="mb-1" style="font-size: 0.9rem;">Document: <strong>Invoice</strong></h6>
+        <div class="form-check mt-2">
+        <input class="form-check-input" type="checkbox" value="1" id="saleIsVatable" checked>
+        <label class="form-check-label" for="saleIsVatable" style="font-size:0.9rem;">
+          Vatable sale (12%)
+        </label>
+        <small class="text-muted d-block">Uncheck for Non‑VAT sale</small>
+      </div>
       <div>
         <h6>Total: ₱<span id="total">0.00</span></h6>
         <button id="checkoutBtn" class="btn btn-primary w-100 mt-2">
@@ -451,10 +458,11 @@ document.addEventListener("DOMContentLoaded", function() {
     // Default document type now fixed to 'Invoice'
     const selectedDocType = 'Invoice';
 
+    const saleIsVatable = document.getElementById('saleIsVatable').checked;
     const response = await fetch('/api/sale', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: cart, doc_type: selectedDocType }) 
+      body: JSON.stringify({ items: cart, doc_type: selectedDocType, is_vatable: saleIsVatable, discount_percent: parseFloat(document.getElementById('discountPercent')?.value || 0) })
     });
 
     const data = await response.json();
