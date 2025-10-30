@@ -49,6 +49,7 @@ class Sale(db.Model):
     customer_name = db.Column(db.String(200), nullable=True)
     total = db.Column(db.Float, nullable=False)
     vat = db.Column(db.Float, nullable=False, default=0.0)
+    is_vatable = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(50), default='paid')
     items = db.relationship('SaleItem', backref='sale', cascade='all, delete-orphan')
     document_number = db.Column(db.String(50), unique=True)
@@ -71,6 +72,7 @@ class Purchase(db.Model):
     supplier = db.Column(db.String(200))
     total = db.Column(db.Float, nullable=False, default=0.0)
     vat = db.Column(db.Float, nullable=False, default=0.0)
+    is_vatable = db.Column(db.Boolean, nullable=False, default=True)
     status = db.Column(db.String(50), default='Recorded', nullable=False)
     items = db.relationship('PurchaseItem', backref='purchase', cascade='all, delete-orphan')
 
