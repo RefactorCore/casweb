@@ -212,45 +212,66 @@ def vat_report():
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str)
 
-    # --- NEW: Query all four sources for VAT ---
+    # Prepare base queries for each source
     sale_query = Sale.query
     ar_invoice_query = ARInvoice.query
     purchase_query = Purchase.query
     ap_invoice_query = APInvoice.query
-    
+
+    # Make end_date inclusive for datetime comparisons
     end_date_inclusive = None
     if end_date:
         end_date_inclusive = end_date + timedelta(days=1)
 
+    # Apply date filters where appropriate
     if start_date:
         sale_query = sale_query.filter(Sale.created_at >= start_date)
         ar_invoice_query = ar_invoice_query.filter(ARInvoice.date >= start_date)
         purchase_query = purchase_query.filter(Purchase.created_at >= start_date)
         ap_invoice_query = ap_invoice_query.filter(APInvoice.date >= start_date)
-    
+
     if end_date_inclusive:
         sale_query = sale_query.filter(Sale.created_at < end_date_inclusive)
         ar_invoice_query = ar_invoice_query.filter(ARInvoice.date < end_date_inclusive)
         purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
         ap_invoice_query = ap_invoice_query.filter(APInvoice.date < end_date_inclusive)
 
-    # --- NEW: Sum VAT from all relevant tables ---
-    sales_vat = sum(s.vat or 0 for s in sale_query.all())
-    ar_invoice_vat = sum(ar.vat or 0 for ar in ar_invoice_query.all())
+    # --- NON-VAT AWARE SUMS ---
+    # Vatable cash sales and AR invoices (these contribute to Output VAT)
+    vatable_sales = sale_query.filter(Sale.is_vatable == True).all()
+    vatable_ar = ar_invoice_query.filter(ARInvoice.vat != None, ARInvoice.vat > 0).all()
+
+    sales_vat = sum((s.vat or 0) for s in vatable_sales)
+    ar_invoice_vat = sum((ar.vat or 0) for ar in vatable_ar)
     total_output_vat = sales_vat + ar_invoice_vat
 
-    purchases_vat = sum(p.vat or 0 for p in purchase_query.all())
-    ap_invoice_vat = sum(ap.vat or 0 for ap in ap_invoice_query.all())
+    # Non‑VAT cash sales and AR invoices (for reporting, not included in Output VAT)
+    nonvat_sales_total = sum(s.total or 0 for s in sale_query.filter((Sale.is_vatable == False) | (Sale.is_vatable == None)).all())
+    nonvat_ar_total = sum(ar.total or 0 for ar in ar_invoice_query.filter((ARInvoice.vat == 0) | (ARInvoice.vat == None)).all())
+    total_nonvat_sales = nonvat_sales_total + nonvat_ar_total
+
+    # Vatable purchases and AP invoices (these contribute to Input VAT)
+    vatable_purchases = purchase_query.filter(Purchase.is_vatable == True).all()
+    vatable_ap = ap_invoice_query.filter(APInvoice.vat != None, APInvoice.vat > 0).all()
+
+    purchases_vat = sum((p.vat or 0) for p in vatable_purchases)
+    ap_invoice_vat = sum((ap.vat or 0) for ap in vatable_ap)
     total_input_vat = purchases_vat + ap_invoice_vat
 
+    # Non‑VAT purchases (for reporting)
+    nonvat_purchases_total = sum(p.total or 0 for p in purchase_query.filter((Purchase.is_vatable == False) | (Purchase.is_vatable == None)).all())
+    nonvat_ap_total = sum(ap.total or 0 for ap in ap_invoice_query.filter((APInvoice.vat == 0) | (APInvoice.vat == None)).all())
+    total_nonvat_purchases = nonvat_purchases_total + nonvat_ap_total
+
     vat_payable = total_output_vat - total_input_vat
-    # --- END OF NEW LOGIC ---
 
     return render_template(
         'vat_report.html',
-        total_output_vat=total_output_vat, # <-- Renamed
-        total_input_vat=total_input_vat,   # <-- Renamed
+        total_output_vat=total_output_vat,
+        total_input_vat=total_input_vat,
         vat_payable=vat_payable,
+        total_nonvat_sales=total_nonvat_sales,
+        total_nonvat_purchases=total_nonvat_purchases,
         start_date=start_date_str,
         end_date=end_date_str
     )
@@ -732,54 +753,55 @@ def export_income_statement():
 @login_required
 @role_required('Admin', 'Accountant')
 def export_vat_report():
-    """Exports the VAT report to CSV."""
     start_date = parse_date(request.args.get("start_date"))
     end_date = parse_date(request.args.get("end_date"))
 
-    # --- NEW: Re-run the new vat_report logic ---
     sale_query = Sale.query
     ar_invoice_query = ARInvoice.query
     purchase_query = Purchase.query
     ap_invoice_query = APInvoice.query
-    
-    end_date_inclusive = None
-    if end_date:
-        end_date_inclusive = end_date + timedelta(days=1)
 
     if start_date:
         sale_query = sale_query.filter(Sale.created_at >= start_date)
         ar_invoice_query = ar_invoice_query.filter(ARInvoice.date >= start_date)
         purchase_query = purchase_query.filter(Purchase.created_at >= start_date)
         ap_invoice_query = ap_invoice_query.filter(APInvoice.date >= start_date)
-    
-    if end_date_inclusive:
+    if end_date:
+        end_date_inclusive = end_date + timedelta(days=1)
         sale_query = sale_query.filter(Sale.created_at < end_date_inclusive)
         ar_invoice_query = ar_invoice_query.filter(ARInvoice.date < end_date_inclusive)
         purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
         ap_invoice_query = ap_invoice_query.filter(APInvoice.date < end_date_inclusive)
 
-    sales_vat = sum(s.vat or 0 for s in sale_query.all())
-    ar_invoice_vat = sum(ar.vat or 0 for ar in ar_invoice_query.all())
+    sales_vat = sum(s.vat or 0 for s in sale_query.filter(Sale.is_vatable == True).all())
+    ar_invoice_vat = sum(ar.vat or 0 for ar in ar_invoice_query.filter(ARInvoice.vat != None, ARInvoice.vat > 0).all())
     total_output_vat = sales_vat + ar_invoice_vat
 
-    purchases_vat = sum(p.vat or 0 for p in purchase_query.all())
-    ap_invoice_vat = sum(ap.vat or 0 for ap in ap_invoice_query.all())
+    purchases_vat = sum(p.vat or 0 for p in purchase_query.filter(Purchase.is_vatable == True).all())
+    ap_invoice_vat = sum(ap.vat or 0 for ap in ap_invoice_query.filter(APInvoice.vat != None, APInvoice.vat > 0).all())
     total_input_vat = purchases_vat + ap_invoice_vat
 
+    nonvat_sales = sum(s.total or 0 for s in sale_query.filter((Sale.is_vatable == False) | (Sale.is_vatable == None)).all())
+    nonvat_ar = sum(ar.total or 0 for ar in ar_invoice_query.filter((ARInvoice.vat == 0) | (ARInvoice.vat == None)).all())
+    total_nonvat_sales = nonvat_sales + nonvat_ar
+
+    nonvat_purchases = sum(p.total or 0 for p in purchase_query.filter((Purchase.is_vatable == False) | (Purchase.is_vatable == None)).all())
+    nonvat_ap = sum(ap.total or 0 for ap in ap_invoice_query.filter((APInvoice.vat == 0) | (APInvoice.vat == None)).all())
+    total_nonvat_purchases = nonvat_purchases + nonvat_ap
+
     vat_payable = total_output_vat - total_input_vat
-    # --- End of logic ---
 
     output = io.StringIO()
     writer = csv.writer(output)
-
     writer.writerow(["Type", "Amount (₱)"])
-    writer.writerow(["Total Input VAT (from all purchases)", f"{total_input_vat:.2f}"])
-    writer.writerow(["Total Output VAT (from all sales)", f"{total_output_vat:.2f}"])
+    writer.writerow(["Total Input VAT (from all vatable purchases)", f"{total_input_vat:.2f}"])
+    writer.writerow(["Total Output VAT (from all vatable sales)", f"{total_output_vat:.2f}"])
+    writer.writerow(["VAT Payable", f"{vat_payable:.2f}"])
+    writer.writerow([])
 
-    if vat_payable >= 0:
-        writer.writerow(["VAT Payable", f"{vat_payable:.2f}"])
-    else:
-        writer.writerow(["VAT Refund", f"{abs(vat_payable):.2f}"])
+    # Add Non-VAT details
+    writer.writerow(["Non-VAT Sales (Cash + AR)", f"{total_nonvat_sales:.2f}"])
+    writer.writerow(["Non-VAT Purchases (Cash + AP)", f"{total_nonvat_purchases:.2f}"])
 
     output.seek(0)
     filename = f"vat_report_{datetime.now().strftime('%Y%m%d')}.csv"

@@ -488,8 +488,8 @@ def api_add_multiple_products():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@login_required
 @core_bp.route('/purchase', methods=['GET', 'POST'])
+@login_required
 @role_required('Admin', 'Accountant', 'Cashier')
 def purchase():
     if request.method == 'POST':
@@ -502,8 +502,10 @@ def purchase():
                 flash("No items added to the purchase. Please add products first.", "warning")
                 return redirect(url_for('core.purchase'))
 
+            # --- NEW: Read purchase-level vatable flag (default True) ---
+            purchase_is_vatable = 'is_vatable' in request.form
+
             # --- NEW: Find or Create Supplier ---
-            # This makes your supplier list grow automatically
             supplier = Supplier.query.filter_by(name=supplier_name).first()
             if not supplier and supplier_name != 'Unknown':
                 supplier = Supplier(name=supplier_name)
@@ -511,7 +513,7 @@ def purchase():
                 db.session.flush()
 
             # --- Create Purchase record ---
-            purchase = Purchase(total=0, vat=0, supplier=supplier_name)
+            purchase = Purchase(total=0, vat=0, supplier=supplier_name, is_vatable=purchase_is_vatable)
             db.session.add(purchase)
             db.session.flush()
 
@@ -519,17 +521,24 @@ def purchase():
 
             for item in items:
                 sku = item.get('sku')
-                qty = int(item.get('qty', 0))
-                unit_cost = float(item.get('unit_cost', 0))
+                try:
+                    qty = int(item.get('qty', 0))
+                    unit_cost = float(item.get('unit_cost', 0))
+                except (TypeError, ValueError):
+                    continue  # Skip invalid rows
+
                 name = item.get('name', 'Unnamed')
 
                 if not sku or qty <= 0 or unit_cost <= 0:
                     continue  # Skip invalid item rows
 
-                # --- Compute line totals ---
-                line_net = qty * unit_cost
-                vat = round(line_net * VAT_RATE, 2)
-                line_total = line_net + vat
+                # --- Compute line totals (respect vatable flag) ---
+                line_net = round(qty * unit_cost, 2)
+                if purchase_is_vatable:
+                    vat = round(line_net * VAT_RATE, 2)
+                else:
+                    vat = 0.0
+                line_total = round(line_net + vat, 2)
 
                 # --- Find or create product ---
                 product = Product.query.filter_by(sku=sku).first()
@@ -546,15 +555,14 @@ def purchase():
                     db.session.flush()
                 else:
                     # Weighted average cost update
-                    # Make sure product quantity is not zero to avoid DivisionByZero
                     if product.quantity + qty > 0:
                         old_val = product.cost_price * product.quantity
                         new_val = unit_cost * qty
                         product.quantity += qty
                         product.cost_price = (old_val + new_val) / product.quantity
                     else:
-                        product.quantity += qty # This handles 0 case
-                        product.cost_price = unit_cost # Just update to new cost
+                        product.quantity += qty
+                        product.cost_price = unit_cost
 
                 # --- Record PurchaseItem ---
                 purchase_item = PurchaseItem(
@@ -572,15 +580,23 @@ def purchase():
                 vat_total += vat
 
             # --- Finalize totals ---
-            purchase.total = total
-            purchase.vat = vat_total
+            purchase.total = round(total, 2)
+            purchase.vat = round(vat_total, 2)
 
-            # --- Record journal entry ---
-            journal_lines = [
-                {"account_code": get_system_account_code('Inventory'), "debit": total - vat_total, "credit": 0},
-                {"account_code": get_system_account_code('VAT Input'), "debit": vat_total, "credit": 0},
-                {"account_code": get_system_account_code('Accounts Payable'), "debit": 0, "credit": total}
-            ]
+            # --- Record journal entry (respect vatable flag) ---
+            if purchase_is_vatable:
+                journal_lines = [
+                    {"account_code": get_system_account_code('Inventory'), "debit": round(total - vat_total, 2), "credit": 0},
+                    {"account_code": get_system_account_code('VAT Input'), "debit": round(vat_total, 2), "credit": 0},
+                    {"account_code": get_system_account_code('Accounts Payable'), "debit": 0, "credit": round(total, 2)}
+                ]
+            else:
+                # Non-VAT purchase: Inventory is debited with the full amount, no VAT Input line
+                journal_lines = [
+                    {"account_code": get_system_account_code('Inventory'), "debit": round(total, 2), "credit": 0},
+                    {"account_code": get_system_account_code('Accounts Payable'), "debit": 0, "credit": round(total, 2)}
+                ]
+
             journal = JournalEntry(
                 description=f"Purchase #{purchase.id} - {supplier_name}",
                 entries_json=json.dumps(journal_lines)
@@ -598,9 +614,9 @@ def purchase():
             return redirect(url_for('core.purchase'))
 
     products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
-    suppliers = Supplier.query.order_by(Supplier.name).all() # Get all suppliers
-    today = datetime.utcnow().strftime('%Y-%m-%d') # Get today's date
-    
+    suppliers = Supplier.query.order_by(Supplier.name).all()  # Get all suppliers
+    today = datetime.utcnow().strftime('%Y-%m-%d')  # Get today's date
+
     return render_template('purchase.html', products=products, suppliers=suppliers, today=today)
 
 
@@ -721,7 +737,9 @@ def pos():
 def api_sale():
     data = request.json
     items = data.get('items', [])
-    # DEFAULT TO 'Invoice' instead of 'OR'
+    # NEW: Read sale-level vatable flag (default True)
+    sale_is_vatable = bool(data.get('is_vatable', True))
+    # existing doc_type handling (you may already have default Invoice)
     doc_type = data.get('doc_type', 'Invoice')
 
     if not items:
@@ -743,7 +761,7 @@ def api_sale():
         full_doc_number = f"INV-{doc_num:06d}"
 
         # Create sale with document_type = 'Invoice'
-        sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type='Invoice')
+        sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type='Invoice', is_vatable=sale_is_vatable)
         db.session.add(sale)
         db.session.flush()
 
@@ -760,8 +778,15 @@ def api_sale():
                 return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
             line_total = qty * product.sale_price
-            line_net = round(line_total / (1 + VAT_RATE), 2)
-            vat = round(line_total - line_net, 2)
+            if sale_is_vatable:
+                # VAT-inclusive price -> compute VAT portion
+                line_net = round(line_total / (1 + VAT_RATE), 2)
+                vat = round(line_total - line_net, 2)
+            else:
+                # Non-vatable sale: VAT = 0, net equals total
+                line_net = round(line_total, 2)
+                vat = 0.0
+
             cogs = qty * product.cost_price
 
             db.session.add(SaleItem(
@@ -778,7 +803,9 @@ def api_sale():
             vat_total += vat
             cogs_total += cogs
 
-        sale.total, sale.vat = total, vat_total
+        sale.total = total
+        # Save the aggregated vat_total computed in loop (ensure you accumulate vat_total in loop)
+        sale.vat = vat_total
 
         je_lines = [
             {'account_code': get_system_account_code('Cash'), 'debit': total, 'credit': 0},
@@ -1065,28 +1092,14 @@ def new_journal():
 
 @core_bp.route('/vat_report')
 def vat_report():
+    """
+    Redirect old core VAT report route to the canonical reports.vat_report endpoint.
+    Keeps backward compatibility for any links using /vat_report.
+    """
+    # Preserve possible filters if present
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
-
-    query_sales = Sale.query
-    query_purchases = Purchase.query
-
-    if start_date and end_date:
-        query_sales = query_sales.filter(Sale.created_at.between(start_date, end_date))
-        query_purchases = query_purchases.filter(Purchase.created_at.between(start_date, end_date))
-
-    sale_vat = sum(s.vat for s in query_sales.all())
-    purchase_vat = sum(p.vat for p in query_purchases.all())
-    vat_payable = sale_vat - purchase_vat
-
-    return render_template(
-        'vat_report.html',
-        sale_vat=sale_vat,
-        purchase_vat=purchase_vat,
-        vat_payable=vat_payable,
-        start_date=start_date,
-        end_date=end_date
-    )
+    return redirect(url_for('reports.vat_report', start_date=start_date, end_date=end_date))
 
 
 def parse_date(date_str):
