@@ -236,31 +236,58 @@ def vat_report():
         purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
         ap_invoice_query = ap_invoice_query.filter(APInvoice.date < end_date_inclusive)
 
-    # --- NON-VAT AWARE SUMS ---
-    # Vatable cash sales and AR invoices (these contribute to Output VAT)
-    vatable_sales = sale_query.filter(Sale.is_vatable == True).all()
-    vatable_ar = ar_invoice_query.filter(ARInvoice.vat != None, ARInvoice.vat > 0).all()
-
-    sales_vat = sum((s.vat or 0) for s in vatable_sales)
-    ar_invoice_vat = sum((ar.vat or 0) for ar in vatable_ar)
+    # --- NON-VAT AWARE SUMS (use DB aggregates for performance) ---
+    # Vatable cash sales VAT
+    sales_vat = float(
+        sale_query.filter(Sale.is_vatable == True)
+        .with_entities(func.coalesce(func.sum(Sale.vat), 0))
+        .scalar() or 0
+    )
+    # Vatable AR invoices VAT
+    ar_invoice_vat = float(
+        ar_invoice_query.filter(ARInvoice.vat != None, ARInvoice.vat > 0)
+        .with_entities(func.coalesce(func.sum(ARInvoice.vat), 0))
+        .scalar() or 0
+    )
     total_output_vat = sales_vat + ar_invoice_vat
 
-    # Non‑VAT cash sales and AR invoices (for reporting, not included in Output VAT)
-    nonvat_sales_total = sum(s.total or 0 for s in sale_query.filter((Sale.is_vatable == False) | (Sale.is_vatable == None)).all())
-    nonvat_ar_total = sum(ar.total or 0 for ar in ar_invoice_query.filter((ARInvoice.vat == 0) | (ARInvoice.vat == None)).all())
+    # Non-VAT Sales totals (cash + AR)
+    nonvat_sales_total = float(
+        sale_query.filter((Sale.is_vatable == False) | (Sale.is_vatable == None))
+        .with_entities(func.coalesce(func.sum(Sale.total), 0))
+        .scalar() or 0
+    )
+    nonvat_ar_total = float(
+        ar_invoice_query.filter((ARInvoice.vat == 0) | (ARInvoice.vat == None))
+        .with_entities(func.coalesce(func.sum(ARInvoice.total), 0))
+        .scalar() or 0
+    )
     total_nonvat_sales = nonvat_sales_total + nonvat_ar_total
 
-    # Vatable purchases and AP invoices (these contribute to Input VAT)
-    vatable_purchases = purchase_query.filter(Purchase.is_vatable == True).all()
-    vatable_ap = ap_invoice_query.filter(APInvoice.vat != None, APInvoice.vat > 0).all()
-
-    purchases_vat = sum((p.vat or 0) for p in vatable_purchases)
-    ap_invoice_vat = sum((ap.vat or 0) for ap in vatable_ap)
+    # Vatable purchases VAT
+    purchases_vat = float(
+        purchase_query.filter(Purchase.is_vatable == True)
+        .with_entities(func.coalesce(func.sum(Purchase.vat), 0))
+        .scalar() or 0
+    )
+    ap_invoice_vat = float(
+        ap_invoice_query.filter(APInvoice.vat != None, APInvoice.vat > 0)
+        .with_entities(func.coalesce(func.sum(APInvoice.vat), 0))
+        .scalar() or 0
+    )
     total_input_vat = purchases_vat + ap_invoice_vat
 
-    # Non‑VAT purchases (for reporting)
-    nonvat_purchases_total = sum(p.total or 0 for p in purchase_query.filter((Purchase.is_vatable == False) | (Purchase.is_vatable == None)).all())
-    nonvat_ap_total = sum(ap.total or 0 for ap in ap_invoice_query.filter((APInvoice.vat == 0) | (APInvoice.vat == None)).all())
+    # Non-VAT Purchases totals (cash + AP)
+    nonvat_purchases_total = float(
+        purchase_query.filter((Purchase.is_vatable == False) | (Purchase.is_vatable == None))
+        .with_entities(func.coalesce(func.sum(Purchase.total), 0))
+        .scalar() or 0
+    )
+    nonvat_ap_total = float(
+        ap_invoice_query.filter((APInvoice.vat == 0) | (APInvoice.vat == None))
+        .with_entities(func.coalesce(func.sum(APInvoice.total), 0))
+        .scalar() or 0
+    )
     total_nonvat_purchases = nonvat_purchases_total + nonvat_ap_total
 
     vat_payable = total_output_vat - total_input_vat
@@ -308,7 +335,8 @@ def vat_return():
     # --- ADD THIS QUERY ---
     cash_sales_in_month = Sale.query.filter(
         extract('year', Sale.created_at) == year,
-        extract('month', Sale.created_at) == month_num
+        extract('month', Sale.created_at) == month_num,
+        Sale.is_vatable == True
     ).all()
     # --- END ADD ---
     
@@ -337,7 +365,8 @@ def vat_return():
     # --- ADD THIS QUERY ---
     cash_purchases_in_month = Purchase.query.filter(
         extract('year', Purchase.created_at) == year,
-        extract('month', Purchase.created_at) == month_num
+        extract('month', Purchase.created_at) == month_num,
+        Purchase.is_vatable == True
     ).all()
     # --- END ADD ---
     
@@ -773,20 +802,20 @@ def export_vat_report():
         purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
         ap_invoice_query = ap_invoice_query.filter(APInvoice.date < end_date_inclusive)
 
-    sales_vat = sum(s.vat or 0 for s in sale_query.filter(Sale.is_vatable == True).all())
-    ar_invoice_vat = sum(ar.vat or 0 for ar in ar_invoice_query.filter(ARInvoice.vat != None, ARInvoice.vat > 0).all())
+    sales_vat = float(sale_query.filter(Sale.is_vatable == True).with_entities(func.coalesce(func.sum(Sale.vat), 0)).scalar() or 0)
+    ar_invoice_vat = float(ar_invoice_query.filter(ARInvoice.vat != None, ARInvoice.vat > 0).with_entities(func.coalesce(func.sum(ARInvoice.vat), 0)).scalar() or 0)
     total_output_vat = sales_vat + ar_invoice_vat
 
-    purchases_vat = sum(p.vat or 0 for p in purchase_query.filter(Purchase.is_vatable == True).all())
-    ap_invoice_vat = sum(ap.vat or 0 for ap in ap_invoice_query.filter(APInvoice.vat != None, APInvoice.vat > 0).all())
+    purchases_vat = float(purchase_query.filter(Purchase.is_vatable == True).with_entities(func.coalesce(func.sum(Purchase.vat), 0)).scalar() or 0)
+    ap_invoice_vat = float(ap_invoice_query.filter(APInvoice.vat != None, APInvoice.vat > 0).with_entities(func.coalesce(func.sum(APInvoice.vat), 0)).scalar() or 0)
     total_input_vat = purchases_vat + ap_invoice_vat
 
-    nonvat_sales = sum(s.total or 0 for s in sale_query.filter((Sale.is_vatable == False) | (Sale.is_vatable == None)).all())
-    nonvat_ar = sum(ar.total or 0 for ar in ar_invoice_query.filter((ARInvoice.vat == 0) | (ARInvoice.vat == None)).all())
+    nonvat_sales = float(sale_query.filter((Sale.is_vatable == False) | (Sale.is_vatable == None)).with_entities(func.coalesce(func.sum(Sale.total), 0)).scalar() or 0)
+    nonvat_ar = float(ar_invoice_query.filter((ARInvoice.vat == 0) | (ARInvoice.vat == None)).with_entities(func.coalesce(func.sum(ARInvoice.total), 0)).scalar() or 0)
     total_nonvat_sales = nonvat_sales + nonvat_ar
 
-    nonvat_purchases = sum(p.total or 0 for p in purchase_query.filter((Purchase.is_vatable == False) | (Purchase.is_vatable == None)).all())
-    nonvat_ap = sum(ap.total or 0 for ap in ap_invoice_query.filter((APInvoice.vat == 0) | (APInvoice.vat == None)).all())
+    nonvat_purchases = float(purchase_query.filter((Purchase.is_vatable == False) | (Purchase.is_vatable == None)).with_entities(func.coalesce(func.sum(Purchase.total), 0)).scalar() or 0)
+    nonvat_ap = float(ap_invoice_query.filter((APInvoice.vat == 0) | (APInvoice.vat == None)).with_entities(func.coalesce(func.sum(APInvoice.total), 0)).scalar() or 0)
     total_nonvat_purchases = nonvat_purchases + nonvat_ap
 
     vat_payable = total_output_vat - total_input_vat

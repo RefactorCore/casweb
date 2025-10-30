@@ -659,19 +659,21 @@ def cancel_purchase(purchase_id):
         total = purchase.total
 
         # 3. Create the reversing journal entry
-        # (This part is the same as your original code)
+        # Include VAT Input reversal only when the original purchase had VAT
         journal_lines = [
             {"account_code": get_system_account_code('Accounts Payable'), "debit": total, "credit": 0},
             {"account_code": get_system_account_code('Inventory'), "debit": 0, "credit": total_net},
-            {"account_code": get_system_account_code('VAT Input'), "debit": 0, "credit": total_vat}
         ]
+        if total_vat and total_vat > 0:
+            journal_lines.append({"account_code": get_system_account_code('VAT Input'), "debit": 0, "credit": total_vat})
+
         journal = JournalEntry(
             description=f"Reversal/Cancel of Purchase #{purchase.id} - {purchase.supplier}",
             entries_json=json.dumps(journal_lines)
         )
         db.session.add(journal)
 
-        # --- 4. NEW: Reverse Product Quantities ---
+        # --- 4. Reverse Product Quantities ---
         # We do not touch the average cost_price.
         for item in purchase.items:
             product = Product.query.get(item.product_id)
@@ -738,7 +740,7 @@ def api_sale():
     data = request.json
     items = data.get('items', [])
     # NEW: Read sale-level vatable flag (default True)
-    sale_is_vatable = bool(data.get('is_vatable', True))
+    sale_is_vatable = bool(data.get('is_vatable', False))
     # existing doc_type handling (you may already have default Invoice)
     doc_type = data.get('doc_type', 'Invoice')
 
@@ -777,14 +779,13 @@ def api_sale():
                 db.session.rollback()
                 return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
-            line_total = qty * product.sale_price
+            line_total = round(qty * product.sale_price, 2)
             if sale_is_vatable:
                 # VAT-inclusive price -> compute VAT portion
                 line_net = round(line_total / (1 + VAT_RATE), 2)
                 vat = round(line_total - line_net, 2)
             else:
-                # Non-vatable sale: VAT = 0, net equals total
-                line_net = round(line_total, 2)
+                line_net = line_total
                 vat = 0.0
 
             cogs = qty * product.cost_price
@@ -1112,8 +1113,9 @@ def parse_date(date_str):
 @core_bp.route('/export_vat', methods=['GET'])
 def export_vat_report():
     # --- Parse optional date filters ---
-    start_date = parse_date(request.args.get("start_date"))
-    end_date = parse_date(request.args.get("end_date"))
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    return redirect(url_for('reports.export_vat_report', start_date=start_date, end_date=end_date))
 
     # --- Build queries ---
     sale_query = Sale.query
