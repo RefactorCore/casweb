@@ -721,29 +721,29 @@ def pos():
 def api_sale():
     data = request.json
     items = data.get('items', [])
-    doc_type = data.get('doc_type', 'OR') # Assumes frontend will send this, defaults to 'OR'
+    # DEFAULT TO 'Invoice' instead of 'OR'
+    doc_type = data.get('doc_type', 'Invoice')
 
     if not items:
         return jsonify({'error': 'No items in sale'}), 400
 
     try:
-        # --- NEW: Get the next document number ---
         profile = CompanyProfile.query.first()
         if not profile:
-            # Important: You must have a company profile in your database for this to work
             return jsonify({'error': 'Company profile not set up in settings'}), 500
 
-        if doc_type == 'SI':
-            doc_num = profile.next_si_number
-            profile.next_si_number += 1 # Increment for the next sale
-            full_doc_number = f"SI-{doc_num:06d}" # Formats to SI-000001
-        else: # Default to OR
-            doc_num = profile.next_or_number
-            profile.next_or_number += 1 # Increment for the next sale
-            full_doc_number = f"OR-{doc_num:06d}" # Formats to OR-000001
-        
-        # --- MODIFIED: Pass the new document info when creating the Sale ---
-        sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type=doc_type)
+        # Use unified invoice number
+        # Ensure next_invoice_number exists (backwards compatibility)
+        if not hasattr(profile, 'next_invoice_number') or profile.next_invoice_number is None:
+            profile.next_invoice_number = max(getattr(profile, 'next_or_number', 1) or 1,
+                                              getattr(profile, 'next_si_number', 1) or 1)
+
+        doc_num = profile.next_invoice_number
+        profile.next_invoice_number += 1
+        full_doc_number = f"INV-{doc_num:06d}"
+
+        # Create sale with document_type = 'Invoice'
+        sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type='Invoice')
         db.session.add(sale)
         db.session.flush()
 
@@ -753,14 +753,13 @@ def api_sale():
             qty = int(it['qty'])
             product = Product.query.filter_by(sku=sku).first()
             if not product:
-                # Rollback to prevent leaving an empty sale record
                 db.session.rollback()
                 return jsonify({'error': f'Product {sku} not found'}), 404
             if product.quantity < qty:
                 db.session.rollback()
                 return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
-            line_total = qty * product.sale_price 
+            line_total = qty * product.sale_price
             line_net = round(line_total / (1 + VAT_RATE), 2)
             vat = round(line_total - line_net, 2)
             cogs = qty * product.cost_price
@@ -768,9 +767,9 @@ def api_sale():
             db.session.add(SaleItem(
                 sale_id=sale.id, product_id=product.id,
                 product_name=product.name, sku=sku,
-                qty=qty, 
-                unit_price=product.sale_price, # Store the inclusive price
-                line_total=line_total, # Store the inclusive total
+                qty=qty,
+                unit_price=product.sale_price,
+                line_total=line_total,
                 cogs=cogs
             ))
 
@@ -788,22 +787,17 @@ def api_sale():
             {'account_code': get_system_account_code('COGS'), 'debit': cogs_total, 'credit': 0},
             {'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': cogs_total},
         ]
-        # --- MODIFIED: Update Journal Entry description ---
         db.session.add(JournalEntry(description=f'Sale #{sale.id} ({full_doc_number})', entries_json=json.dumps(je_lines)))
 
         log_action(f'Recorded Sale #{sale.id} ({full_doc_number}) for ₱{total:,.2f}.')
-        
         db.session.commit()
-        
-        # --- MODIFIED: Return the new document number to the frontend ---
-        return jsonify({
-            'status': 'ok', 
-            'sale_id': sale.id, 
-            'receipt_number': full_doc_number,
-            'vat': vat_total  # <-- ADD THIS LINE
-        })
 
-    # --- NEW: Error handling for database issues ---
+        return jsonify({
+            'status': 'ok',
+            'sale_id': sale.id,
+            'receipt_number': full_doc_number,
+            'vat': vat_total
+        })
     except exc.IntegrityError:
         db.session.rollback()
         return jsonify({'error': 'Failed to generate unique document number. Please try again.'}), 500
