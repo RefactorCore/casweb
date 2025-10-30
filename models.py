@@ -14,6 +14,7 @@ class CompanyProfile(db.Model):
     license_key = db.Column(db.String(100))
     next_or_number = db.Column(db.Integer, default=1)
     next_si_number = db.Column(db.Integer, default=1)
+    next_invoice_number = db.Column(db.Integer, default=1)
 
 class Account(db.Model):
     id = db.Column(db.Integer, primary_key=True)

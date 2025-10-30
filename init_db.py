@@ -96,3 +96,11 @@ for p in Purchase.query.all():
     db.session.add(je)
 db.session.commit()
 print('Sample journal entries created.')
+
+if not hasattr(profile, 'next_invoice_number') or profile.next_invoice_number is None:
+    # If you already used OR/SI, try to pick a safe starting number:
+    # start from the max of existing OR/SI counters or 1
+    starting = max(getattr(profile, 'next_or_number', 1) or 1, getattr(profile, 'next_si_number', 1) or 1)
+    profile.next_invoice_number = starting
+    db.session.add(profile)
+    db.session.commit()
