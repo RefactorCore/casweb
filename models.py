@@ -54,6 +54,9 @@ class Sale(db.Model):
     items = db.relationship('SaleItem', backref='sale', cascade='all, delete-orphan')
     document_number = db.Column(db.String(50), unique=True)
     document_type = db.Column(db.String(10)) # To store 'OR' or 'SI'
+    discount_type = db.Column(db.String(20), nullable=True)     # 'percent' or 'fixed'
+    discount_input = db.Column(db.Float, nullable=True)         # the user-entered percentage or fixed amount
+    discount_value = db.Column(db.Float, nullable=True, default=0.0)  # resolved currency amount
 
 class SaleItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)

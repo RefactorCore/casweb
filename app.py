@@ -96,6 +96,7 @@ def seed_essential_data(app):
         ('401','Sales Revenue','Revenue'),
         ('402','Other Revenue','Revenue'),
         ('405', 'Sales Returns', 'Revenue'),
+        ('407', 'Discounts Allowed', 'Expense'),
         ('501','COGS','Expense'),
         ('601','VAT Payable','Liability'),
         ('602','VAT Input','Asset'),
