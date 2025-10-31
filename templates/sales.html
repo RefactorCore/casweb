@@ -24,8 +24,10 @@
 <!-- 💰 Summary -->
 {% if summary %}
 <div class="alert alert-info mb-3">
-  <strong>Summary:</strong> Total Sales ₱{{ "%.2f"|format(summary.total_sales) }},
+  <strong>Summary:</strong>
+  Total Sales ₱{{ "%.2f"|format(summary.total_sales) }},
   VAT ₱{{ "%.2f"|format(summary.total_vat) }},
+  Discounts ₱{{ "%.2f"|format(summary.total_discount if summary.total_discount is defined else 0) }},
   Transactions: {{ summary.count }}
 </div>
 {% endif %}
@@ -39,6 +41,7 @@
         <th>Customer</th>
         <th>Total</th>
         <th>VAT</th>
+        <th>Discount</th>
         <th>Status</th>
         <th>Date</th>
         <th>Action</th>
@@ -52,6 +55,7 @@
           <td>{{ s.customer_name or '—' }}</td>
           <td>₱{{ "%.2f"|format(s.total) }}</td>
           <td>₱{{ "%.2f"|format(s.vat) }}</td>
+          <td>₱{{ "%.2f"|format(s.discount_value or 0) }}</td>
           <td>
             {% if s.status == 'paid' %}
               <span class="badge bg-success">Paid</span>
@@ -70,7 +74,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="8" class="text-center text-muted">No sales recorded yet.</td>
+          <td colspan="9" class="text-center text-muted">No sales recorded yet.</td>
         </tr>
         {% endfor %}
       </tbody>
