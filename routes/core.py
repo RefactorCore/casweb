@@ -735,14 +735,19 @@ def pos():
     )
 
 
+# (only the api_sale function is shown — replace the existing api_sale in routes/core.py with this)
 @core_bp.route('/api/sale', methods=['POST'])
 def api_sale():
-    data = request.json
+    data = request.json or {}
     items = data.get('items', [])
-    # NEW: Read sale-level vatable flag (default True)
     sale_is_vatable = bool(data.get('is_vatable', False))
-    # existing doc_type handling (you may already have default Invoice)
     doc_type = data.get('doc_type', 'Invoice')
+    discount = data.get('discount') or {}
+    discount_type = discount.get('type') or None  # 'percent' or 'fixed'
+    discount_input = float(discount.get('input_value') or 0) if discount.get('input_value') is not None else 0.0
+
+    # Read customer_name (frontend sets to 'Walk-in' if empty)
+    customer_name = (data.get('customer_name') or '').strip() or 'Walk-in'
 
     if not items:
         return jsonify({'error': 'No items in sale'}), 400
@@ -752,8 +757,7 @@ def api_sale():
         if not profile:
             return jsonify({'error': 'Company profile not set up in settings'}), 500
 
-        # Use unified invoice number
-        # Ensure next_invoice_number exists (backwards compatibility)
+        # Invoice numbering
         if not hasattr(profile, 'next_invoice_number') or profile.next_invoice_number is None:
             profile.next_invoice_number = max(getattr(profile, 'next_or_number', 1) or 1,
                                               getattr(profile, 'next_si_number', 1) or 1)
@@ -762,15 +766,28 @@ def api_sale():
         profile.next_invoice_number += 1
         full_doc_number = f"INV-{doc_num:06d}"
 
-        # Create sale with document_type = 'Invoice'
-        sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type='Invoice', is_vatable=sale_is_vatable)
+        # create sale (we will set totals after calculations)
+        sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type=doc_type,
+                    is_vatable=sale_is_vatable, customer_name=customer_name,
+                    discount_type=discount_type, discount_input=discount_input)
         db.session.add(sale)
         db.session.flush()
 
-        total = vat_total = cogs_total = 0
+        # --- VAT-INCLUSIVE pricing: treat product.sale_price as GROSS (includes VAT) ---
+        subtotal_gross = 0.0   # sum of gross line totals (price * qty)
+        cogs_total = 0.0
+        processed = []
+
         for it in items:
-            sku = it['sku']
-            qty = int(it['qty'])
+            sku = it.get('sku')
+            try:
+                qty = int(it.get('qty') or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            if qty <= 0:
+                db.session.rollback()
+                return jsonify({'error': f'Invalid quantity for SKU {sku}'}), 400
+
             product = Product.query.filter_by(sku=sku).first()
             if not product:
                 db.session.rollback()
@@ -779,52 +796,134 @@ def api_sale():
                 db.session.rollback()
                 return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
-            line_total = round(qty * product.sale_price, 2)
-            if sale_is_vatable:
-                # VAT-inclusive price -> compute VAT portion
-                line_net = round(line_total / (1 + VAT_RATE), 2)
-                vat = round(line_total - line_net, 2)
-            else:
-                line_net = line_total
-                vat = 0.0
-
+            # unit_price is GROSS price (includes VAT)
+            unit_price = float(product.sale_price)
+            line_gross = round(unit_price * qty, 2)
             cogs = qty * product.cost_price
 
-            db.session.add(SaleItem(
-                sale_id=sale.id, product_id=product.id,
-                product_name=product.name, sku=sku,
-                qty=qty,
-                unit_price=product.sale_price,
-                line_total=line_total,
-                cogs=cogs
-            ))
+            processed.append({
+                'product': product,
+                'qty': qty,
+                'unit_price': unit_price,
+                'line_gross': line_gross,
+                'cogs': cogs
+            })
 
-            product.quantity -= qty
-            total += line_total
-            vat_total += vat
+            subtotal_gross += line_gross
             cogs_total += cogs
 
-        sale.total = total
-        # Save the aggregated vat_total computed in loop (ensure you accumulate vat_total in loop)
-        sale.vat = vat_total
+        # Compute discount resolved_value (server-side) applied to gross subtotal
+        resolved_discount = 0.0
+        if discount_type and discount_input:
+            if discount_type == 'percent':
+                pct = max(0.0, min(100.0, float(discount_input)))
+                resolved_discount = round(subtotal_gross * (pct / 100.0), 2)
+            else:
+                resolved_discount = round(min(subtotal_gross, float(discount_input)), 2)
 
-        je_lines = [
-            {'account_code': get_system_account_code('Cash'), 'debit': total, 'credit': 0},
-            {'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': total - vat_total},
-            {'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': vat_total},
-            {'account_code': get_system_account_code('COGS'), 'debit': cogs_total, 'credit': 0},
-            {'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': cogs_total},
-        ]
+        # Discounted gross (amount customer pays, still gross)
+        discounted_gross = round(max(0.0, subtotal_gross - resolved_discount), 2)
+
+        # Compute VAT by extracting from the discounted gross (VAT-inclusive pricing)
+        if sale_is_vatable:
+            vat_after = round(discounted_gross * (VAT_RATE / (1 + VAT_RATE)), 2)
+        else:
+            vat_after = 0.0
+
+        net_sales_after = round(discounted_gross - vat_after, 2)
+        total_amount = discounted_gross  # amount customer pays
+
+        # Persist sale totals
+        sale.discount_value = resolved_discount
+        sale.total = total_amount
+        sale.vat = vat_after
+        db.session.flush()
+
+        # Insert sale items and deduct stock (store original gross line totals for trace)
+        for p in processed:
+            product = p['product']
+            db.session.add(SaleItem(
+                sale_id=sale.id,
+                product_id=product.id,
+                product_name=product.name,
+                sku=product.sku,
+                qty=p['qty'],
+                unit_price=p['unit_price'],
+                line_total=p['line_gross'],
+                cogs=p['cogs']
+            ))
+            product.quantity -= p['qty']
+
+        # --- Journal Entry (balanced for VAT-INCLUSIVE with Discounts Allowed) ---
+        # Compute VAT before discount from subtotal_gross (for posting sales revenue at gross net before discount)
+        if sale_is_vatable:
+            vat_before = round(subtotal_gross * (VAT_RATE / (1 + VAT_RATE)), 2)
+        else:
+            vat_before = 0.0
+        gross_net_before = round(subtotal_gross - vat_before, 2)
+
+        je_lines = []
+        # Debit Cash = discounted_gross (amount received)
+        je_lines.append({'account_code': get_system_account_code('Cash'), 'debit': float(total_amount), 'credit': 0})
+        # Debit Discounts Allowed = resolved_discount (contra-revenue)
+        discount_acc_code = get_system_account_code('Discounts Allowed')
+        if resolved_discount and resolved_discount > 0:
+            je_lines.append({'account_code': discount_acc_code, 'debit': float(resolved_discount), 'credit': 0})
+        # Debit COGS
+        if cogs_total and cogs_total > 0:
+            je_lines.append({'account_code': get_system_account_code('COGS'), 'debit': float(cogs_total), 'credit': 0})
+
+        # Credit Sales Revenue = gross_net_before (net of VAT before discount)
+        je_lines.append({'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': float(gross_net_before)})
+
+        # Credit VAT Payable = vat_after (VAT computed on discounted gross)
+        if vat_after and vat_after > 0:
+            je_lines.append({'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': float(vat_after)})
+
+        # Credit Inventory = cogs_total
+        if cogs_total and cogs_total > 0:
+            je_lines.append({'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': float(cogs_total)})
+
+        # Make sure JE balances: (Cash + Discounts Allowed + COGS) == (Sales Revenue + VAT Payable + Inventory)
+        total_debits = sum(float(l.get('debit', 0) or 0) for l in je_lines)
+        total_credits = sum(float(l.get('credit', 0) or 0) for l in je_lines)
+
+        # Small rounding adjustment attempt (absorb into Discounts Allowed or Cash)
+        rounding_diff = round(total_debits - total_credits, 2)
+        if abs(rounding_diff) >= 0.01:
+            adjusted = False
+            # Try adjust Discounts Allowed if present
+            for l in je_lines:
+                if l.get('account_code') == discount_acc_code and l.get('debit', 0) >= abs(rounding_diff):
+                    l['debit'] = round(l['debit'] - rounding_diff, 2)
+                    adjusted = True
+                    break
+            if not adjusted:
+                # Fallback: adjust Cash
+                cash_code = get_system_account_code('Cash')
+                for l in je_lines:
+                    if l.get('account_code') == cash_code:
+                        l['debit'] = round(l['debit'] - rounding_diff, 2)
+                        adjusted = True
+                        break
+            total_debits = sum(float(l.get('debit', 0) or 0) for l in je_lines)
+            total_credits = sum(float(l.get('credit', 0) or 0) for l in je_lines)
+
+        if round(total_debits, 2) != round(total_credits, 2):
+            db.session.rollback()
+            return jsonify({'error': 'Journal entry balancing failed due to rounding differences.'}), 500
+
         db.session.add(JournalEntry(description=f'Sale #{sale.id} ({full_doc_number})', entries_json=json.dumps(je_lines)))
 
-        log_action(f'Recorded Sale #{sale.id} ({full_doc_number}) for ₱{total:,.2f}.')
+        log_action(f'Recorded Sale #{sale.id} ({full_doc_number}) for ₱{total_amount:,.2f}. Customer: {customer_name}. Discount: ₱{resolved_discount:.2f}')
         db.session.commit()
 
         return jsonify({
             'status': 'ok',
             'sale_id': sale.id,
             'receipt_number': full_doc_number,
-            'vat': vat_total
+            'vat': vat_after,
+            'discount_value': resolved_discount
         })
     except exc.IntegrityError:
         db.session.rollback()
@@ -863,9 +962,12 @@ def sales():
     # Compute summary for current page (not full dataset)
     total_sales = sum(s.total for s in sales)
     total_vat = sum(s.vat for s in sales)
+    total_discount = sum((s.discount_value or 0.0) for s in sales)
+
     summary = {
         "total_sales": total_sales,
         "total_vat": total_vat,
+        "total_discount": total_discount,
         "count": len(sales)
     } if sales else None
 
@@ -888,6 +990,7 @@ def print_receipt(sale_id):
     items = SaleItem.query.filter_by(sale_id=sale.id).all()
     return render_template('receipt.html', sale=sale, items=items)
 
+# (excerpt - replaced export_sales function with corrected filter)
 @core_bp.route('/export_sales')
 def export_sales():
     format_type = request.args.get('format', 'csv')
@@ -899,8 +1002,9 @@ def export_sales():
 
     query = Sale.query
 
+    # Fix: use customer_name (column present in Sale model)
     if search:
-        query = query.filter(Sale.customer.ilike(f"%{search}%") | Sale.id.ilike(f"%{search}%"))
+        query = query.filter((Sale.customer_name.ilike(f"%{search}%")) | (Sale.id.cast(db.String).ilike(f"%{search}%")))
     if start_date:
         query = query.filter(Sale.created_at >= start_date)
     if end_date:
@@ -912,14 +1016,16 @@ def export_sales():
         # 🧾 Generate CSV in memory
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["ID", "Customer", "Total", "VAT", "Status", "Date"])
+        # include discount column so exports contain that info
+        writer.writerow(["ID", "Customer", "Total", "VAT", "Discount", "Status", "Date"])
 
         for s in sales:
             writer.writerow([
                 s.id,
                 s.customer_name or '',
                 f"{s.total:.2f}",
-                f"{s.vat:.2f}",
+                f"{(s.vat or 0):.2f}",
+                f"{(s.discount_value or 0):.2f}",
                 s.status or "",
                 s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else ""
             ])
