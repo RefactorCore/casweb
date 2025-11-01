@@ -731,7 +731,8 @@ def pos():
         products=pagination.items,
         pagination=pagination,
         search=search,
-        safe_args=safe_args
+        safe_args=safe_args,
+        current_user_name=current_user.username
     )
 
 
