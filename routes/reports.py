@@ -9,6 +9,8 @@ from datetime import datetime, date, timedelta
 from routes.decorators import role_required
 import io
 import csv
+from routes.utils import get_system_account_code  # add this near your other imports at top of file
+
 
 reports_bp = Blueprint('reports', __name__, url_prefix='/reports')
 
@@ -167,18 +169,27 @@ def balance_sheet():
 @login_required
 @role_required('Admin', 'Accountant')
 def income_statement():
-    # --- MODIFIED: Get dates from URL ---
+    # --- Get dates from URL ---
     start_date_str = request.args.get('start_date', '')
     end_date_str = request.args.get('end_date', '')
 
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str)
 
-    # --- MODIFIED: Pass dates to the aggregator ---
+    # Aggregate balances for the period
     agg = aggregate_account_balances(start_date, end_date)
     
     revenues, expenses = {}, {}
+    cogs_amount = 0.0
 
+    # Option A: use system COGS account code (preferred)
+    try:
+        cogs_code = get_system_account_code('COGS')
+    except Exception:
+        cogs_code = None
+
+    # Build revenues and expenses dictionaries and extract COGS
+    # agg: account_code -> balance (debit - credit)
     for acc_code, bal in agg.items():
         acct_rec = Account.query.filter_by(code=acc_code).first()
         if not acct_rec:
@@ -187,19 +198,38 @@ def income_statement():
         acc_name = acct_rec.name
         acc_type = acct_rec.type
 
+        # Revenue accounts: we show as positive numbers (sales)
         if acc_type == 'Revenue':
+            # agg stores debit - credit; revenue accounts are typically credit balances (negative in agg)
             revenues[acc_name] = -bal
         elif acc_type == 'Expense':
-            expenses[acc_name] = bal
+            # expense normal is debit => positive in agg
+            # if this is the COGS account, record separately
+            if cogs_code and acc_code == cogs_code:
+                cogs_amount += float(bal or 0.0)
+            elif acc_name.lower() in ('cogs', 'cost of goods sold') and not cogs_code:
+                # fallback if get_system_account_code failed
+                cogs_amount += float(bal or 0.0)
+            else:
+                expenses[acc_name] = float(bal or 0.0)
 
+    # If COGS sits under multiple accounts (rare), you could sum them here — currently we picked single system account.
     total_revenue = sum(revenues.values())
     total_expense = sum(expenses.values())
-    net_income = total_revenue - total_expense
-    
-    # --- MODIFIED: Pass dates back to the template ---
-    return render_template('income_statement.html', revenues=revenues, expenses=expenses,
-                           total_revenue=total_revenue, total_expense=total_expense, net_income=net_income,
-                           start_date=start_date_str, end_date=end_date_str)
+    # Net income considering COGS as part of expenses for presentation:
+    gross_profit = total_revenue - cogs_amount
+    net_income = gross_profit - total_expense
+
+    return render_template('income_statement.html',
+                           revenues=revenues,
+                           expenses=expenses,
+                           cogs=cogs_amount,
+                           total_revenue=total_revenue,
+                           total_expense=total_expense,
+                           gross_profit=gross_profit,
+                           net_income=net_income,
+                           start_date=start_date_str,
+                           end_date=end_date_str)
 
 
 @reports_bp.route('/vat-report')
@@ -719,62 +749,75 @@ def export_balance_sheet():
 @role_required('Admin', 'Accountant')
 def export_income_statement():
     """Exports the income statement to CSV."""
-    
-    # --- ADD THIS BLOCK TO READ DATE FILTERS ---
     start_date_str = request.args.get('start_date', '')
     end_date_str = request.args.get('end_date', '')
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str)
-    # --- END OF ADDED BLOCK ---
-    
-    # --- MODIFIED: Pass dates to the aggregator ---
+
     agg = aggregate_account_balances(start_date, end_date)
-    
-    # --- Re-run the income_statement logic ---
+
     revenues, expenses = {}, {}
+    cogs_amount = 0.0
+
+    try:
+        cogs_code = get_system_account_code('COGS')
+    except Exception:
+        cogs_code = None
+
     for acc_code, bal in agg.items():
         acct_rec = Account.query.filter_by(code=acc_code).first()
-        if not acct_rec: continue
-        
+        if not acct_rec:
+            continue
+
         if acct_rec.type == 'Revenue':
             revenues[acct_rec.name] = -bal
         elif acct_rec.type == 'Expense':
-            expenses[acct_rec.name] = bal
+            if cogs_code and acc_code == cogs_code:
+                cogs_amount += float(bal or 0.0)
+            elif acct_rec.name.lower() in ('cogs', 'cost of goods sold') and not cogs_code:
+                cogs_amount += float(bal or 0.0)
+            else:
+                expenses[acct_rec.name] = float(bal or 0.0)
 
     total_revenue = sum(revenues.values())
     total_expense = sum(expenses.values())
-    net_income = total_revenue - total_expense
-    # --- End of logic ---
-    
+    gross_profit = total_revenue - cogs_amount
+    net_income = gross_profit - total_expense
+
     output = io.StringIO()
     writer = csv.writer(output)
-    
-    # --- MODIFIED: Add date range to report ---
+
     date_range_label = f"For the period {start_date_str} to {end_date_str}"
     if not start_date_str or not end_date_str:
         date_range_label = "For All Time" # Fallback
+
     writer.writerow(["Income Statement", ""])
     writer.writerow([date_range_label, ""])
     writer.writerow([])
-    # --- END MODIFICATION ---
-    
+
     writer.writerow(["REVENUES", "Amount"])
     for name, balance in revenues.items():
         writer.writerow([name, f"{balance:.2f}"])
     writer.writerow(["Total Revenue", f"{total_revenue:.2f}"])
     writer.writerow([])
-    
+
+    # Insert COGS as single line item right after revenues (Xero style)
+    writer.writerow(["Cost of Goods Sold (COGS)", f"({cogs_amount:.2f})"])
+    writer.writerow(["Gross Profit", f"{gross_profit:.2f}"])
+    writer.writerow([])
+
     writer.writerow(["EXPENSES", "Amount"])
     for name, balance in expenses.items():
-        writer.writerow([name, f"{balance:.2f}"])
-    writer.writerow(["Total Expenses", f"{total_expense:.2f}"])
+        writer.writerow([name, f"({balance:.2f})"])
+    writer.writerow(["Total Expenses", f"({total_expense:.2f})"])
     writer.writerow([])
-    
+
     writer.writerow(["NET INCOME", f"{net_income:.2f}"])
 
     output.seek(0)
     filename = f"income_statement_{datetime.now().strftime('%Y%m%d')}.csv"
-    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    return Response(output.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 
