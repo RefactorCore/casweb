@@ -1,11 +1,12 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file
 from flask_login import login_required, current_user
-from models import db, Customer, Supplier, ARInvoice, APInvoice, Payment, JournalEntry, CreditMemo 
+from models import db, Customer, Supplier, ARInvoice, APInvoice, Payment, JournalEntry, CreditMemo, Account, Product, ARInvoiceItem, RecurringBill
 import io, csv
 import json
 from .decorators import role_required
 from .utils import log_action, get_system_account_code
 from models import Product, ARInvoiceItem
+from datetime import datetime, timedelta
 
 ar_ap_bp = Blueprint('ar_ap', __name__, url_prefix='')
 
@@ -109,7 +110,7 @@ def ar_invoices():
 def ap_invoices():
     """
     Create AP invoice (credit purchase). Creates a JournalEntry:
-      Debit Inventory / Expense (net)
+      Debit Inventory / Expense (net) - User Selected
       Debit VAT Input (vat)
       Credit Accounts Payable (total)
     """
@@ -118,23 +119,71 @@ def ap_invoices():
             sup_id = int(request.form.get('supplier_id') or 0) or None
         except ValueError:
             sup_id = None
+            
         total = float(request.form.get('total') or 0)
         vat = float(request.form.get('vat') or 0)
+        
+        # --- NEW FIELDS ---
+        invoice_number = request.form.get('invoice_number')
+        description = request.form.get('description')
+        is_vatable = request.form.get('is_vatable') == 'true'
+        
+        # Handle due date
+        due_date_str = request.form.get('due_date')
+        due_date = None
+        if due_date_str:
+            try:
+                due_date = datetime.strptime(due_date_str, '%Y-%m-%d')
+            except ValueError:
+                flash('Invalid due date format. Please use YYYY-MM-DD.', 'danger')
+                return redirect(url_for('ar_ap.ap_invoices'))
+        
+        # Handle expense account
+        default_inv_code = get_system_account_code('Inventory')
+        expense_account_code = request.form.get('expense_account_code') or default_inv_code
+        
+        if not is_vatable:
+            vat = 0.0 # Force VAT to zero if not vatable
+
         if total <= 0:
             flash('Invoice total must be > 0')
             return redirect(url_for('ar_ap.ap_invoices'))
+        
+        if not sup_id:
+            flash('Please select a supplier.')
+            return redirect(url_for('ar_ap.ap_invoices'))
+        
+        if not expense_account_code:
+            flash('Please select a debit account.')
+            return redirect(url_for('ar_ap.ap_invoices'))
 
         try:
-            inv = APInvoice(supplier_id=sup_id, total=round(total, 2), vat=round(vat, 2))
+            inv = APInvoice(
+                supplier_id=sup_id, 
+                total=round(total, 2), 
+                vat=round(vat, 2),
+                invoice_number=invoice_number,
+                description=description,
+                due_date=due_date,
+                is_vatable=is_vatable,
+                expense_account_code=expense_account_code
+            )
             db.session.add(inv)
             db.session.flush()
 
+            # --- UPDATED JOURNAL ENTRY ---
+            # Debits the user-selected account
             je_lines = [
-                    {'account_code': get_system_account_code('Inventory'), 'debit': round(inv.total - inv.vat, 2), 'credit': 0},
+                    {'account_code': expense_account_code, 'debit': round(inv.total - inv.vat, 2), 'credit': 0},
                     {'account_code': get_system_account_code('VAT Input'), 'debit': round(inv.vat, 2), 'credit': 0},
                     {'account_code': get_system_account_code('Accounts Payable'), 'debit': 0, 'credit': round(inv.total, 2)},
                 ]
-            je = JournalEntry(description=f'AP Invoice #{inv.id}', entries_json=json.dumps(je_lines))
+            
+            # Remove VAT Input line if VAT is zero
+            if inv.vat == 0:
+                je_lines.pop(1) # Removes the VAT input line
+
+            je = JournalEntry(description=f'AP Invoice #{inv.id} ({inv.invoice_number}) - {inv.description}', entries_json=json.dumps(je_lines))
             db.session.add(je)
             log_action(f'Created AP Invoice #{inv.id} for ₱{inv.total:,.2f}.')
             db.session.commit()
@@ -147,9 +196,21 @@ def ap_invoices():
 
         return redirect(url_for('ar_ap.ap_invoices'))
 
+    # --- UPDATED GET REQUEST ---
     invoices = APInvoice.query.order_by(APInvoice.date.desc()).all()
     suppliers = Supplier.query.order_by(Supplier.name).all()
-    return render_template('ap_invoices.html', invoices=invoices, suppliers=suppliers)
+    
+    # Get accounts that can be debited (Expenses and "Inventory" Asset)
+    accounts = Account.query.filter(
+        (Account.type == 'Expense') | (Account.code == get_system_account_code('Inventory'))
+    ).order_by(Account.name).all()
+    
+    return render_template(
+        'ap_invoices.html', 
+        invoices=invoices, 
+        suppliers=suppliers,
+        accounts=accounts # Pass accounts to the template
+    )
 
 
 @ar_ap_bp.route('/payment', methods=['POST'])
@@ -545,3 +606,153 @@ def export_ap_csv():
             'status': inv.status
         })
     return send_file(io.BytesIO(si.getvalue().encode('utf-8')), mimetype='text/csv', download_name='ap_invoices.csv', as_attachment=True)
+
+@ar_ap_bp.route('/recurring-bills', methods=['GET', 'POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def recurring_bills():
+    """
+    Manage (create, list) recurring bill templates.
+    """
+    if request.method == 'POST':
+        try:
+            supplier_id = int(request.form.get('supplier_id'))
+            expense_account_code = request.form.get('expense_account_code')
+            description = request.form.get('description')
+            total = float(request.form.get('total'))
+            vat = float(request.form.get('vat') or 0.0)
+            is_vatable = request.form.get('is_vatable') == 'true'
+            frequency = request.form.get('frequency') # e.g., 'monthly'
+            next_due_date_str = request.form.get('next_due_date')
+            
+            if not supplier_id or not expense_account_code or total <= 0 or not frequency or not next_due_date_str:
+                flash('Please fill out all required fields.', 'danger')
+                return redirect(url_for('ar_ap.recurring_bills'))
+
+            next_due_date = datetime.strptime(next_due_date_str, '%Y-%m-%d')
+            
+            if not is_vatable:
+                vat = 0.0
+
+            bill = RecurringBill(
+                supplier_id=supplier_id,
+                expense_account_code=expense_account_code,
+                description=description,
+                total=round(total, 2),
+                vat=round(vat, 2),
+                is_vatable=is_vatable,
+                frequency=frequency,
+                next_due_date=next_due_date,
+                is_active=True
+            )
+            db.session.add(bill)
+            log_action(f'Created new recurring bill for {description}.')
+            db.session.commit()
+            flash('Recurring bill created successfully.', 'success')
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error creating recurring bill: {str(e)}', 'danger')
+        
+        return redirect(url_for('ar_ap.recurring_bills'))
+
+    # GET request
+    bills = RecurringBill.query.filter_by(is_active=True).order_by(RecurringBill.next_due_date).all()
+    suppliers = Supplier.query.order_by(Supplier.name).all()
+    accounts = Account.query.filter(
+        (Account.type == 'Expense') | (Account.code == get_system_account_code('Inventory'))
+    ).order_by(Account.name).all()
+
+    return render_template(
+        'recurring_bills.html', 
+        bills=bills, 
+        suppliers=suppliers, 
+        accounts=accounts
+    )
+
+
+@ar_ap_bp.route('/recurring-bills/generate/<int:bill_id>', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def generate_recurring_bill(bill_id):
+    """
+    Generates a new APInvoice from a RecurringBill template.
+    """
+    bill = RecurringBill.query.get_or_404(bill_id)
+    
+    try:
+        # 1. Create the new APInvoice
+        inv = APInvoice(
+            supplier_id=bill.supplier_id,
+            total=bill.total,
+            vat=bill.vat,
+            description=f"(Recurring) {bill.description}",
+            due_date=bill.next_due_date,
+            is_vatable=bill.is_vatable,
+            expense_account_code=bill.expense_account_code,
+            status='Open' # Explicitly set status
+        )
+        db.session.add(inv)
+        db.session.flush() # Need the inv.id for the journal entry
+
+        # 2. Create the Journal Entry
+        je_lines = [
+            {'account_code': bill.expense_account_code, 'debit': round(inv.total - inv.vat, 2), 'credit': 0},
+            {'account_code': get_system_account_code('VAT Input'), 'debit': round(inv.vat, 2), 'credit': 0},
+            {'account_code': get_system_account_code('Accounts Payable'), 'debit': 0, 'credit': round(inv.total, 2)},
+        ]
+        if inv.vat == 0:
+            je_lines.pop(1) # Remove VAT input line
+
+        je = JournalEntry(description=f'Recurring AP Invoice #{inv.id} - {inv.description}', entries_json=json.dumps(je_lines))
+        db.session.add(je)
+
+        # 3. Update the RecurringBill's next_due_date
+        today = datetime.utcnow()
+        if bill.frequency == 'monthly':
+            # This is a simple way; a more robust way would use dateutil.relativedelta
+            next_due = bill.next_due_date + timedelta(days=30)
+            # Ensure next_due is in the future
+            while next_due <= today:
+                next_due += timedelta(days=30)
+            bill.next_due_date = next_due
+            
+        elif bill.frequency == 'quarterly':
+            next_due = bill.next_due_date + timedelta(days=90)
+            while next_due <= today:
+                next_due += timedelta(days=90)
+            bill.next_due_date = next_due
+
+        # (add more frequencies like 'annually' as needed)
+
+        log_action(f'Generated AP Invoice #{inv.id} from recurring bill #{bill.id}.')
+        db.session.commit()
+        flash(f'Successfully generated AP Invoice #{inv.id}.', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error generating invoice: {str(e)}', 'danger')
+
+    return redirect(url_for('ar_ap.recurring_bills'))
+
+@ar_ap_bp.route('/recurring-bills/delete/<int:bill_id>', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def delete_recurring_bill(bill_id):
+    """
+    Deletes a recurring bill template.
+    """
+    bill = RecurringBill.query.get_or_404(bill_id)
+    
+    try:
+        bill_description = bill.description # Get description before deleting
+        db.session.delete(bill)
+        db.session.commit()
+        log_action(f'Deleted recurring bill: {bill_description} (ID: {bill_id}).')
+        flash(f'Recurring bill "{bill_description}" has been deleted.', 'success')
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error deleting bill: {str(e)}', 'danger')
+
+    return redirect(url_for('ar_ap.recurring_bills'))
