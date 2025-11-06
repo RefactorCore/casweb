@@ -87,6 +87,7 @@ def seed_essential_data(app):
     # Define the Chart of Accounts list here
     accounts_to_seed = [
         ('101','Cash','Asset'),
+        ('102','Petty Cash','Asset'),
         ('110', 'Accounts Receivable', 'Asset'),
         ('120','Inventory','Asset'),
         ('121', 'Creditable Withholding Tax', 'Asset'),
@@ -102,6 +103,12 @@ def seed_essential_data(app):
         ('602','VAT Input','Asset'),
         ('505', 'Inventory Loss', 'Expense'), 
         ('406', 'Inventory Gain', 'Revenue'),
+        ('510', 'Rent Expense', 'Expense'),
+        ('511', 'Utilities Expense', 'Expense'),
+        ('512', 'Communication Expense', 'Expense'),
+        ('520', 'Salaries and Wages', 'Expense'),
+        ('521', 'Employee Benefits', 'Expense'),
+        ('530', 'Repairs and Maintenance', 'Expense'),
     ]
 
     with app.app_context():

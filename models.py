@@ -155,10 +155,15 @@ class APInvoice(db.Model):
     supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=True)
     supplier = db.relationship('Supplier')
     date = db.Column(db.DateTime, default=datetime.utcnow)
+    invoice_number = db.Column(db.String(100), nullable=True)
+    description = db.Column(db.String(400), nullable=True)
+    due_date = db.Column(db.DateTime, nullable=True)
     total = db.Column(db.Float, nullable=False)
     vat = db.Column(db.Float, nullable=False, default=0.0)
     paid = db.Column(db.Float, nullable=False, default=0.0)
     status = db.Column(db.String(50), default='Open')
+    is_vatable = db.Column(db.Boolean, nullable=False, default=True)
+    expense_account_code = db.Column(db.String(32), db.ForeignKey('account.code'))
 
 class Payment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -221,3 +226,16 @@ class ARInvoiceItem(db.Model):
     
     # Relationship
     product = db.relationship('Product')
+
+class RecurringBill(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('supplier.id'), nullable=False)
+    supplier = db.relationship('Supplier')
+    expense_account_code = db.Column(db.String(32), db.ForeignKey('account.code'))
+    description = db.Column(db.String(400))
+    total = db.Column(db.Float, nullable=False)
+    vat = db.Column(db.Float, default=0.0)
+    is_vatable = db.Column(db.Boolean, default=True)
+    frequency = db.Column(db.String(50)) # e.g., 'monthly', 'quarterly'
+    next_due_date = db.Column(db.DateTime)
+    is_active = db.Column(db.Boolean, default=True)
