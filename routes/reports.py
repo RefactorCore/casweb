@@ -575,26 +575,32 @@ def ap_aging():
 @role_required('Admin', 'Accountant')
 def stock_card(product_id):
     """Generates an inventory stock card for a specific product."""
+    from models import ARInvoiceItem  # ✅ ADD THIS IMPORT
+    
     product = Product.query.get_or_404(product_id)
     
     sales = SaleItem.query.filter_by(product_id=product.id).all()
     purchases = PurchaseItem.query.filter_by(product_id=product.id).all()
-
-    # --- ADD THIS QUERY ---
     adjustments = StockAdjustment.query.filter_by(product_id=product.id).all()
-    # --- END ADD ---
+    
+    # ✅ ADD THIS: Query AR Invoice Items (Billing Invoices)
+    ar_invoice_items = ARInvoiceItem.query.filter_by(product_id=product.id).all()
     
     # Combine and sort transactions by date
     transactions = []
+    
+    # Regular POS/Cash Sales
     for s in sales:
         transactions.append({
             'date': s.sale.created_at,
-            'type': 'Sale',
+            'type': 'Sale (POS)',
             'ref_id': s.sale_id,
             'qty_in': 0,
             'qty_out': s.qty,
-            'cost': product.cost_price # Use current cost for simplicity
+            'cost': product.cost_price
         })
+    
+    # Purchases
     for p in purchases:
          transactions.append({
             'date': p.purchase.created_at,
@@ -605,7 +611,7 @@ def stock_card(product_id):
             'cost': p.unit_cost
         })
 
-    # --- ADD THIS LOOP ---
+    # Stock Adjustments
     for adj in adjustments:
          transactions.append({
             'date': adj.created_at,
@@ -615,20 +621,31 @@ def stock_card(product_id):
             'qty_out': abs(adj.quantity_changed) if adj.quantity_changed < 0 else 0,
             'cost': product.cost_price 
         })
-    # --- END ADD ---
+    
+    # ✅ ADD THIS: Billing Invoice Items (Credit Sales)
+    for ar_item in ar_invoice_items:
+        transactions.append({
+            'date': ar_item.ar_invoice.date,
+            'type': f'Billing Invoice (Utang) - {ar_item.ar_invoice.invoice_number}',
+            'ref_id': ar_item.ar_invoice_id,
+            'qty_in': 0,
+            'qty_out': ar_item.qty,
+            'cost': ar_item.cogs / ar_item.qty if ar_item.qty > 0 else product.cost_price  # Calculate unit cost
+        })
         
     transactions.sort(key=lambda x: x['date'])
     
-    # --- START OF FIX ---
     # Calculate the opening balance by working backward from the current quantity
     current_quantity = product.quantity
     
     total_sales_qty = sum(s.qty for s in sales)
     total_purchase_qty = sum(p.qty for p in purchases)
     total_adjustment_qty = sum(adj.quantity_changed for adj in adjustments)
+    total_ar_invoice_qty = sum(ar.qty for ar in ar_invoice_items)  # ✅ ADD THIS
     
+    # ✅ UPDATE THIS: Include AR invoice items in calculation
     # Opening Balance = Current Qty - (all INs) + (all OUTs)
-    opening_balance = current_quantity - total_purchase_qty - total_adjustment_qty + total_sales_qty
+    opening_balance = current_quantity - total_purchase_qty - total_adjustment_qty + total_sales_qty + total_ar_invoice_qty
     
     # Set the starting running_balance to the calculated opening balance
     running_balance = opening_balance
@@ -637,10 +654,9 @@ def stock_card(product_id):
     report_transactions = []
     
     # Add the Opening Balance as the first row in the report
-    # We find the earliest transaction date (or use today) to put it first
     first_transaction_date = transactions[0]['date'] if transactions else datetime.utcnow()
     report_transactions.append({
-        'date': first_transaction_date - timedelta(seconds=1), # Ensure it's the very first entry
+        'date': first_transaction_date - timedelta(seconds=1),
         'type': 'Opening Balance',
         'ref_id': 'N/A',
         'qty_in': opening_balance if opening_balance > 0 else 0,
@@ -654,7 +670,6 @@ def stock_card(product_id):
         running_balance += t['qty_in'] - t['qty_out']
         t['balance'] = running_balance
         report_transactions.append(t)
-    # --- END OF FIX ---
         
     return render_template('stock_card.html', product=product, 
                            transactions=report_transactions)
