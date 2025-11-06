@@ -115,6 +115,7 @@ class Customer(db.Model):
     tin = db.Column(db.String(50))
     address = db.Column(db.String(300))
     wht_rate_percent = db.Column(db.Float, default=0.0)
+    payment_terms_days = db.Column(db.Integer, default=30)  # ADD THIS LINE - default 30 days
 
 class Supplier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -127,10 +128,27 @@ class ARInvoice(db.Model):
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=True)
     customer = db.relationship('Customer')
     date = db.Column(db.DateTime, default=datetime.utcnow)
+    due_date = db.Column(db.DateTime, nullable=True)  # ADD THIS LINE
     total = db.Column(db.Float, nullable=False)
     vat = db.Column(db.Float, nullable=False, default=0.0)
     paid = db.Column(db.Float, nullable=False, default=0.0)
     status = db.Column(db.String(50), default='Open')
+    
+    # NEW FIELDS
+    is_vatable = db.Column(db.Boolean, nullable=False, default=True)
+    invoice_number = db.Column(db.String(50), unique=True, nullable=True)
+    description = db.Column(db.String(400))
+    items = db.relationship('ARInvoiceItem', backref='ar_invoice', cascade='all, delete-orphan')
+    
+    # ADD THIS METHOD
+    def days_overdue(self):
+        """Calculate how many days overdue this invoice is"""
+        if self.status == 'Paid' or not self.due_date:
+            return 0
+        today = datetime.utcnow()
+        if today > self.due_date:
+            return (today - self.due_date).days
+        return 0
 
 class APInvoice(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -185,3 +203,21 @@ class AuditLog(db.Model):
     def __repr__(self):
         username = self.user.username if self.user else 'System'
         return f'<AuditLog {self.timestamp} - {username}: {self.action}>'
+
+
+# Add this new model after ARInvoice class
+class ARInvoiceItem(db.Model):
+    """Line items for product-based AR invoices"""
+    id = db.Column(db.Integer, primary_key=True)
+    ar_invoice_id = db.Column(db.Integer, db.ForeignKey('ar_invoice.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    product_name = db.Column(db.String(200))
+    sku = db.Column(db.String(64))
+    qty = db.Column(db.Integer, nullable=False)
+    unit_price = db.Column(db.Float, nullable=False)
+    line_total = db.Column(db.Float, nullable=False)
+    cogs = db.Column(db.Float, nullable=False, default=0.0)
+    is_vatable = db.Column(db.Boolean, nullable=False, default=True)
+    
+    # Relationship
+    product = db.relationship('Product')
