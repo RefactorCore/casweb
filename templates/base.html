@@ -145,6 +145,7 @@
           'ar_ap.suppliers',
           'ar_ap.ar_invoices',
           'ar_ap.ap_invoices',
+          'ar_ap.recurring_bills',
           'ar_ap.billing_invoices'
       ] %}
       <a class="text-white {% if ar_ap_active %}active{% endif %}" data-bs-toggle="collapse" href="#arApSubmenu" role="button" aria-expanded="{% if ar_ap_active %}true{% else %}false{% endif %}" aria-controls="arApSubmenu">
@@ -172,6 +173,9 @@
           </a>
           <a href="{{ url_for('ar_ap.ap_invoices') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.ap_invoices' %}active{% endif %}">
             - AP Invoices
+          </a>
+          <a href="{{ url_for('ar_ap.recurring_bills') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.recurring_bills' %}active{% endif %}">
+            - Recurring Bills
           </a>
 
           <a href="{{ url_for('reports.ar_aging') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.ar_aging' %}active{% endif %}">
@@ -202,7 +206,7 @@
           <a href="{{ url_for('reports.vat_return') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.vat_return' %}active{% endif %}">
             - VAT Return
           </a>
-          <a href="{{ url_for('reports.summary_list_sales') }}" classs="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_sales' %}active{% endif %}">
+          <a href="{{ url_for('reports.summary_list_sales') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_sales' %}active{% endif %}">
             - Summary List of Sales
           </a>
           <a href="{{ url_for('reports.summary_list_purchases') }}" class="ms-3 ps-4 {% if request.endpoint == 'reports.summary_list_purchases' %}active{% endif %}">

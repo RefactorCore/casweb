@@ -15,7 +15,7 @@
                     <tr>
                         <th>ID</th>
                         <th>Date</th>
-                        <th>Supplier</th>
+                        <th>Due Date</th> <th>Inv #</th> <th>Supplier</th>
                         <th>Total</th>
                         <th>Paid</th>
                         <th>Balance</th>
@@ -29,6 +29,8 @@
                     <tr>
                         <td>AP-{{ inv.id }}</td>
                         <td>{{ inv.date.strftime('%Y-%m-%d') }}</td>
+                        <td>{{ inv.due_date.strftime('%Y-%m-%d') if inv.due_date else 'N/A' }}</td>
+                        <td>{{ inv.invoice_number or 'N/A' }}</td>
                         <td>{{ inv.supplier.name if inv.supplier else 'N/A' }}</td>
                         <td>{{ inv.total | money }}</td>
                         <td>{{ inv.paid | money }}</td>
@@ -45,8 +47,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="8" class="text-center">No Accounts Payable Invoices found.</td>
-                    </tr>
+                        <td colspan="10" class="text-center">No Accounts Payable Invoices found.</td> </tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -72,14 +73,60 @@
                             {% endfor %}
                         </select>
                     </div>
+
                     <div class="mb-3">
-                        <label class="form-label">Total Amount (Gross/Incl. VAT)</label>
-                        <input type="number" step="0.01" name="total" class="form-control" required>
+                        <label class="form-label">Debit Account (Expense/Category)</label>
+                        <select name="expense_account_code" class="form-select" required>
+                            <option value="">Select Account...</option>
+                            {% for acc in accounts %}
+                            <option value="{{ acc.code }}">{{ acc.name }} ({{ acc.code }})</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Select 'Inventory' for product purchases, or an expense account (e.g., 'Rent') for bills.</div>
                     </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Supplier Invoice #</label>
+                                <input type="text" name="invoice_number" class="form-control" placeholder="e.g., SI-12345">
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Due Date</label>
+                                <input type="date" name="due_date" class="form-control">
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="mb-3">
-                        <label class="form-label">VAT Amount (Input VAT)</label>
-                        <input type="number" step="0.01" name="vat" class="form-control" required>
+                        <label class="form-label">Description</label>
+                        <input type="text" name="description" class="form-control" placeholder="e.g., Monthly Rent for November">
                     </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Total Amount (Gross)</label>
+                                <input type="number" step="0.01" name="total" class="form-control" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">VAT Amount (Input VAT)</label>
+                                <input type="number" step="0.01" name="vat" class="form-control" value="0.00" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="is_vatable" id="isVatable" value="true">
+                        <label class="form-check-label" for="isVatable">
+                          This invoice is Vatable (uncheck if Non-VAT)
+                        </label>
+                    </div>
+
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -125,8 +172,6 @@
 </div>
 
 <script>
-    // Since the payment modal is included in the AR Invoice template, 
-    // we need to make sure the setPaymentDetails function is available if this is the only one loaded.
     function setPaymentDetails(refType, refId, balance) {
         document.getElementById('paymentRefType').value = refType;
         document.getElementById('paymentRefId').value = refId;
