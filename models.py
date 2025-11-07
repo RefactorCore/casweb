@@ -43,6 +43,54 @@ class Product(db.Model):
     def adjust_stock(self, change):
         self.quantity = max(self.quantity + change, 0)
 
+
+# Add this new model after the Product model
+
+class InventoryLot(db.Model):
+    """Tracks inventory purchases in chronological order for FIFO costing"""
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    product = db.relationship('Product', backref='inventory_lots')
+    
+    quantity_remaining = db.Column(db.Integer, nullable=False)  # How many units left in this lot
+    unit_cost = db.Column(db.Float, nullable=False)  # Cost per unit for this lot
+    
+    # Reference to the source transaction
+    purchase_id = db.Column(db.Integer, db.ForeignKey('purchase.id'), nullable=True)
+    purchase_item_id = db.Column(db.Integer, db.ForeignKey('purchase_item.id'), nullable=True)
+    adjustment_id = db.Column(db.Integer, db.ForeignKey('stock_adjustment.id'), nullable=True)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    
+    # For tracking initial inventory from bulk uploads
+    is_opening_balance = db.Column(db.Boolean, default=False)
+    
+    def __repr__(self):
+        return f'<InventoryLot {self.id}: Product {self.product_id}, Qty: {self.quantity_remaining}, Cost: {self.unit_cost}>'
+
+
+class InventoryTransaction(db.Model):
+    """Records the consumption of inventory lots (for audit trail)"""
+    id = db.Column(db.Integer, primary_key=True)
+    lot_id = db.Column(db.Integer, db.ForeignKey('inventory_lot.id'), nullable=False)
+    lot = db.relationship('InventoryLot')
+    
+    quantity_used = db.Column(db.Integer, nullable=False)
+    unit_cost = db.Column(db.Float, nullable=False)
+    total_cost = db.Column(db.Float, nullable=False)
+    
+    # Reference to the transaction that consumed inventory
+    sale_id = db.Column(db.Integer, db.ForeignKey('sale.id'), nullable=True)
+    sale_item_id = db.Column(db.Integer, db.ForeignKey('sale_item.id'), nullable=True)
+    ar_invoice_id = db.Column(db.Integer, db.ForeignKey('ar_invoice.id'), nullable=True)
+    ar_invoice_item_id = db.Column(db.Integer, db.ForeignKey('ar_invoice_item.id'), nullable=True)
+    adjustment_id = db.Column(db.Integer, db.ForeignKey('stock_adjustment.id'), nullable=True)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    
+    def __repr__(self):
+        return f'<InventoryTransaction {self.id}: Lot {self.lot_id}, Qty: {self.quantity_used}, Cost: {self.total_cost}>'
+
 class Sale(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
