@@ -1,6 +1,7 @@
 sku,name,sale_price,cost_price,quantity
-MP-001,Leo tires,1000,900,10
-MP-002,Air Filter Element,150,75,15
-MP-003,Clutch Cable,80,50,20
-MP-004,Side Mirror,250,120,30
-MP-005,Drive Belt (for Scooter/AT),599,300,16
+TIR-LEO-001,Leo tires,1000,900,10
+FIL-AIR-002,Air Filter Element,150,75,15
+CAB-CLT-003,Clutch Cable,80,50,20
+MIR-SIDE-004,Side Mirror,250,120,30
+BLT-DRIVE-005,Drive Belt (for Scooter/AT),599,300,16
+,,,,
