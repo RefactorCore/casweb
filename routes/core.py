@@ -974,50 +974,147 @@ def api_sale():
 
 @core_bp.route('/sales')
 def sales():
-    from models import Sale
-    from app import db  # make sure db is imported
+    from models import Sale, ARInvoice, Customer
+    from app import db
+    from datetime import datetime, timedelta
 
     search = request.args.get('search', '').strip()
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
+    start_date_str = request.args.get('start_date', '').strip()
+    end_date_str = request.args.get('end_date', '').strip()
     page = request.args.get('page', 1, type=int)
+    per_page = 20
 
-    query = Sale.query
+    # ✅ Parse dates properly
+    start_date = None
+    end_date = None
+    
+    if start_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+        except ValueError:
+            flash('Invalid start date format', 'warning')
+    
+    if end_date_str:
+        try:
+            # Add 1 day to make end date inclusive (end of day)
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
+        except ValueError:
+            flash('Invalid end date format', 'warning')
 
+    # ✅ Query both cash sales (POS) and billing invoices (AR)
+    cash_sales_query = Sale.query
+    ar_invoices_query = ARInvoice.query
+
+    # Apply search filters
     if search:
-        query = query.filter(
+        cash_sales_query = cash_sales_query.filter(
             (Sale.customer_name.ilike(f"%{search}%")) |
-            (Sale.id.cast(db.String).ilike(f"%{search}%"))
+            (Sale.id.cast(db.String).ilike(f"%{search}%")) |
+            (Sale.document_number.ilike(f"%{search}%"))
         )
+        ar_invoices_query = ar_invoices_query.join(Customer, ARInvoice.customer_id == Customer.id, isouter=True).filter(
+            (Customer.name.ilike(f"%{search}%")) |
+            (ARInvoice.invoice_number.ilike(f"%{search}%")) |
+            (ARInvoice.description.ilike(f"%{search}%")) |
+            (ARInvoice.id.cast(db.String).ilike(f"%{search}%"))
+        )
+    
+    # ✅ Apply date filters (FIXED)
     if start_date:
-        query = query.filter(Sale.created_at >= start_date)
+        cash_sales_query = cash_sales_query.filter(Sale.created_at >= start_date)
+        ar_invoices_query = ar_invoices_query.filter(ARInvoice.date >= start_date)
+    
     if end_date:
-        query = query.filter(Sale.created_at <= end_date)
+        cash_sales_query = cash_sales_query.filter(Sale.created_at < end_date)
+        ar_invoices_query = ar_invoices_query.filter(ARInvoice.date < end_date)
 
-    pagination = query.order_by(Sale.created_at.desc()).paginate(page=page, per_page=20, error_out=False)
+    # Get all results
+    cash_sales = cash_sales_query.all()
+    billing_invoices = ar_invoices_query.all()
 
-    sales = pagination.items
-
-    # Compute summary for current page (not full dataset)
-    total_sales = sum(s.total for s in sales)
-    total_vat = sum(s.vat for s in sales)
-    total_discount = sum((s.discount_value or 0.0) for s in sales)
-
+    # ✅ Combine into unified sales list
+    all_sales = []
+    
+    # Add cash sales (POS)
+    for s in cash_sales:
+        all_sales.append({
+            'id': s.id,
+            'type': 'Cash Sale',
+            'date': s.created_at,
+            'document_number': s.document_number or f"Sale-{s.id}",
+            'customer_name': s.customer_name or 'Walk-in',
+            'total': s.total,
+            'vat': s.vat or 0.0,
+            'discount_value': s.discount_value or 0.0,
+            'status': s.status or 'paid',
+            'paid': s.total,
+            'balance': 0.0,
+            'created_at': s.created_at
+        })
+    
+    # Add billing invoices (AR)
+    for inv in billing_invoices:
+        all_sales.append({
+            'id': inv.id,
+            'type': 'Billing Invoice',
+            'date': inv.date,
+            'document_number': inv.invoice_number or f"AR-{inv.id}",
+            'customer_name': inv.customer.name if inv.customer else 'N/A',
+            'total': inv.total,
+            'vat': inv.vat or 0.0,
+            'discount_value': 0.0,
+            'status': inv.status,
+            'paid': inv.paid,
+            'balance': inv.total - inv.paid,
+            'created_at': inv.date
+        })
+    
+    # Sort by date descending
+    all_sales.sort(key=lambda x: x['date'], reverse=True)
+    
+    # Manual pagination
+    total_count = len(all_sales)
+    total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_sales = all_sales[start_idx:end_idx]
+    
+    # Create pagination object
+    class Pagination:
+        def __init__(self, page, per_page, total_count, total_pages):
+            self.page = page
+            self.per_page = per_page
+            self.total_count = total_count
+            self.pages = total_pages
+            self.has_prev = page > 1
+            self.has_next = page < total_pages
+            self.prev_num = page - 1 if self.has_prev else None
+            self.next_num = page + 1 if self.has_next else None
+    
+    pagination = Pagination(page, per_page, total_count, total_pages)
+    
+    # Calculate summary
+    total_sales = sum(s['total'] for s in all_sales)
+    total_vat = sum(s['vat'] for s in all_sales)
+    total_discount = sum(s['discount_value'] for s in all_sales)
+    
     summary = {
         "total_sales": total_sales,
         "total_vat": total_vat,
         "total_discount": total_discount,
-        "count": len(sales)
-    } if sales else None
+        "count": len(all_sales),
+        "cash_sales_count": len([s for s in all_sales if s['type'] == 'Cash Sale']),
+        "billing_invoices_count": len([s for s in all_sales if s['type'] == 'Billing Invoice']),
+    } if all_sales else None
 
     return render_template(
         'sales.html',
-        sales=sales,
+        sales=paginated_sales,
         summary=summary,
         pagination=pagination,
         search=search,
-        start_date=start_date,
-        end_date=end_date
+        start_date=start_date_str,  # ✅ Pass back original string for form
+        end_date=end_date_str        # ✅ Pass back original string for form
     )
 
 
@@ -1029,44 +1126,71 @@ def print_receipt(sale_id):
     items = SaleItem.query.filter_by(sale_id=sale.id).all()
     return render_template('receipt.html', sale=sale, items=items)
 
-# (excerpt - replaced export_sales function with corrected filter)
 @core_bp.route('/export_sales')
 def export_sales():
+    from models import Sale, ARInvoice, Customer
+    
     format_type = request.args.get('format', 'csv')
     
-    # 🔍 Optional filters (same as in your sales page)
+    # Optional filters (same as in your sales page)
     search = request.args.get('search', '').strip()
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')
 
-    query = Sale.query
+    # Query both cash sales and AR invoices
+    cash_query = Sale.query
+    ar_query = ARInvoice.query
 
-    # Fix: use customer_name (column present in Sale model)
+    # Apply filters
     if search:
-        query = query.filter((Sale.customer_name.ilike(f"%{search}%")) | (Sale.id.cast(db.String).ilike(f"%{search}%")))
+        cash_query = cash_query.filter(
+            (Sale.customer_name.ilike(f"%{search}%")) | 
+            (Sale.id.cast(db.String).ilike(f"%{search}%"))
+        )
     if start_date:
-        query = query.filter(Sale.created_at >= start_date)
+        cash_query = cash_query.filter(Sale.created_at >= start_date)
+        ar_query = ar_query.filter(ARInvoice.date >= start_date)
     if end_date:
-        query = query.filter(Sale.created_at <= end_date)
+        cash_query = cash_query.filter(Sale.created_at <= end_date)
+        ar_query = ar_query.filter(ARInvoice.date <= end_date)
 
-    sales = query.order_by(Sale.created_at.desc()).all()
+    cash_sales = cash_query.order_by(Sale.created_at.desc()).all()
+    ar_invoices = ar_query.order_by(ARInvoice.date.desc()).all()
 
     if format_type == 'csv':
-        # 🧾 Generate CSV in memory
+        # Generate CSV in memory
         output = io.StringIO()
         writer = csv.writer(output)
-        # include discount column so exports contain that info
-        writer.writerow(["ID", "Customer", "Total", "VAT", "Discount", "Status", "Date"])
+        writer.writerow(["Type", "Doc #", "Date", "Customer", "Total", "Paid", "Balance", "VAT", "Discount", "Status"])
 
-        for s in sales:
+        # Add cash sales
+        for s in cash_sales:
             writer.writerow([
-                s.id,
-                s.customer_name or '',
+                "Cash Sale",
+                s.document_number or f"Sale-{s.id}",
+                s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else "",
+                s.customer_name or "Walk-in",
                 f"{s.total:.2f}",
+                f"{s.total:.2f}",  # Fully paid
+                "0.00",
                 f"{(s.vat or 0):.2f}",
                 f"{(s.discount_value or 0):.2f}",
-                s.status or "",
-                s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else ""
+                s.status or "paid"
+            ])
+        
+        # Add billing invoices
+        for inv in ar_invoices:
+            writer.writerow([
+                "Billing Invoice",
+                inv.invoice_number or f"AR-{inv.id}",
+                inv.date.strftime('%Y-%m-%d %H:%M') if inv.date else "",
+                inv.customer.name if inv.customer else "N/A",
+                f"{inv.total:.2f}",
+                f"{inv.paid:.2f}",
+                f"{(inv.total - inv.paid):.2f}",
+                f"{(inv.vat or 0):.2f}",
+                "0.00",
+                inv.status or "Open"
             ])
 
         output.seek(0)
