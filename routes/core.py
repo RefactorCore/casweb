@@ -278,11 +278,16 @@ def toggle_product_status(product_id):
 
 # --- ADD THIS ENTIRE FUNCTION ---
 
+# Update inventory_bulk_add function (around line 285)
+
 @core_bp.route('/inventory/bulk-add', methods=['GET', 'POST'])
 @login_required
 @role_required('Admin', 'Accountant')
 def inventory_bulk_add():
     if request.method == 'POST':
+        # Import FIFO utilities
+        from routes.fifo_utils import create_inventory_lot
+        
         if 'csv_file' not in request.files:
             flash('No file part', 'danger')
             return redirect(request.url)
@@ -300,14 +305,12 @@ def inventory_bulk_add():
             stream = io.StringIO(file.stream.read().decode("UTF-8"), newline=None)
             csv_reader = csv.reader(stream)
             
-            # Skip header row
             next(csv_reader, None)
             
             products_added = 0
             total_value = 0.0
             errors = []
 
-            # Get account codes *before* the loop
             try:
                 inventory_code = get_system_account_code('Inventory')
                 equity_code = get_system_account_code('Opening Balance Equity')
@@ -317,7 +320,7 @@ def inventory_bulk_add():
             
             for row in csv_reader:
                 if not row or len(row) < 5:
-                    continue # Skip empty/invalid rows
+                    continue
 
                 try:
                     sku = row[0].strip()
@@ -330,7 +333,6 @@ def inventory_bulk_add():
                         errors.append(f"Skipped row (missing SKU or Name): {','.join(row)}")
                         continue
 
-                    # Check for duplicate SKU
                     existing_sku = Product.query.filter_by(sku=sku).first()
                     if existing_sku:
                         errors.append(f"SKU '{sku}' already exists. Skipped.")
@@ -344,11 +346,19 @@ def inventory_bulk_add():
                         quantity=quantity
                     )
                     db.session.add(new_prod)
-                    # --- REMOVED: db.session.flush() ---
+                    db.session.flush()  # ✅ Need the product ID
 
                     if quantity > 0 and cost_price > 0:
                         initial_value = round(quantity * cost_price, 2)
                         total_value += initial_value
+                        
+                        # ✅ NEW: Create inventory lot for opening balance
+                        create_inventory_lot(
+                            product_id=new_prod.id,
+                            quantity=quantity,
+                            unit_cost=cost_price,
+                            is_opening_balance=True
+                        )
                         
                         je_lines = [
                             {'account_code': inventory_code, 'debit': initial_value, 'credit': 0},
@@ -360,21 +370,15 @@ def inventory_bulk_add():
                         )
                         db.session.add(je)
                     
-                    # --- FIX: Commit after EACH successful row ---
-                    # This saves the product and JE for this row immediately.
                     db.session.commit()
-                    
                     products_added += 1
 
                 except ValueError:
-                    db.session.rollback() # Now this only rolls back the current bad row
+                    db.session.rollback()
                     errors.append(f"Invalid number format for row: {','.join(row)}. Skipped.")
                 except Exception as e:
-                    db.session.rollback() # This also only rolls back the current bad row
+                    db.session.rollback()
                     errors.append(f"Error on row {','.join(row)}: {str(e)}. Skipped.")
-
-            # --- FIX: REMOVED the final commit from here ---
-            # db.session.commit() 
             
             flash(f'Successfully added {products_added} products.', 'success')
             if total_value > 0:
@@ -392,7 +396,6 @@ def inventory_bulk_add():
             flash(f'An error occurred processing the file: {str(e)}', 'danger')
             return redirect(request.url)
 
-    # GET request just shows the template
     return render_template('inventory_bulk_add.html')
 
 
@@ -488,12 +491,17 @@ def api_add_multiple_products():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+# Update the purchase function (around line 430)
+
 @core_bp.route('/purchase', methods=['GET', 'POST'])
 @login_required
 @role_required('Admin', 'Accountant', 'Cashier')
 def purchase():
     if request.method == 'POST':
         try:
+            # Import FIFO utilities
+            from routes.fifo_utils import create_inventory_lot
+            
             supplier_name = request.form.get('supplier', '').strip() or 'Unknown'
             items_raw = request.form.get('items_json')
             items = json.loads(items_raw) if items_raw else []
@@ -502,17 +510,14 @@ def purchase():
                 flash("No items added to the purchase. Please add products first.", "warning")
                 return redirect(url_for('core.purchase'))
 
-            # --- NEW: Read purchase-level vatable flag (default True) ---
             purchase_is_vatable = 'is_vatable' in request.form
 
-            # --- NEW: Find or Create Supplier ---
             supplier = Supplier.query.filter_by(name=supplier_name).first()
             if not supplier and supplier_name != 'Unknown':
                 supplier = Supplier(name=supplier_name)
                 db.session.add(supplier)
                 db.session.flush()
 
-            # --- Create Purchase record ---
             purchase = Purchase(total=0, vat=0, supplier=supplier_name, is_vatable=purchase_is_vatable)
             db.session.add(purchase)
             db.session.flush()
@@ -525,14 +530,13 @@ def purchase():
                     qty = int(item.get('qty', 0))
                     unit_cost = float(item.get('unit_cost', 0))
                 except (TypeError, ValueError):
-                    continue  # Skip invalid rows
+                    continue
 
                 name = item.get('name', 'Unnamed')
 
                 if not sku or qty <= 0 or unit_cost <= 0:
-                    continue  # Skip invalid item rows
+                    continue
 
-                # --- Compute line totals (respect vatable flag) ---
                 line_net = round(qty * unit_cost, 2)
                 if purchase_is_vatable:
                     vat = round(line_net * VAT_RATE, 2)
@@ -540,13 +544,12 @@ def purchase():
                     vat = 0.0
                 line_total = round(line_net + vat, 2)
 
-                # --- Find or create product ---
                 product = Product.query.filter_by(sku=sku).first()
                 if not product:
                     product = Product(
                         sku=sku,
                         name=name,
-                        sale_price=round(unit_cost * 1.5, 2),  # 50% markup default
+                        sale_price=round(unit_cost * 1.5, 2),
                         cost_price=unit_cost,
                         quantity=qty,
                         is_active=True
@@ -554,17 +557,10 @@ def purchase():
                     db.session.add(product)
                     db.session.flush()
                 else:
-                    # Weighted average cost update
-                    if product.quantity + qty > 0:
-                        old_val = product.cost_price * product.quantity
-                        new_val = unit_cost * qty
-                        product.quantity += qty
-                        product.cost_price = (old_val + new_val) / product.quantity
-                    else:
-                        product.quantity += qty
-                        product.cost_price = unit_cost
+                    # ✅ FIFO CHANGE: Don't update cost_price with weighted average
+                    # Just add to quantity
+                    product.quantity += qty
 
-                # --- Record PurchaseItem ---
                 purchase_item = PurchaseItem(
                     purchase_id=purchase.id,
                     product_id=product.id,
@@ -575,15 +571,24 @@ def purchase():
                     line_total=line_total
                 )
                 db.session.add(purchase_item)
+                db.session.flush()
+
+                # ✅ NEW: Create inventory lot for FIFO
+                create_inventory_lot(
+                    product_id=product.id,
+                    quantity=qty,
+                    unit_cost=unit_cost,
+                    purchase_id=purchase.id,
+                    purchase_item_id=purchase_item.id
+                )
 
                 total += line_total
                 vat_total += vat
 
-            # --- Finalize totals ---
             purchase.total = round(total, 2)
             purchase.vat = round(vat_total, 2)
 
-            # --- Record journal entry (respect vatable flag) ---
+            # Journal entry (same as before)
             if purchase_is_vatable:
                 journal_lines = [
                     {"account_code": get_system_account_code('Inventory'), "debit": round(total - vat_total, 2), "credit": 0},
@@ -591,7 +596,6 @@ def purchase():
                     {"account_code": get_system_account_code('Accounts Payable'), "debit": 0, "credit": round(total, 2)}
                 ]
             else:
-                # Non-VAT purchase: Inventory is debited with the full amount, no VAT Input line
                 journal_lines = [
                     {"account_code": get_system_account_code('Inventory'), "debit": round(total, 2), "credit": 0},
                     {"account_code": get_system_account_code('Accounts Payable'), "debit": 0, "credit": round(total, 2)}
@@ -614,8 +618,8 @@ def purchase():
             return redirect(url_for('core.purchase'))
 
     products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
-    suppliers = Supplier.query.order_by(Supplier.name).all()  # Get all suppliers
-    today = datetime.utcnow().strftime('%Y-%m-%d')  # Get today's date
+    suppliers = Supplier.query.order_by(Supplier.name).all()
+    today = datetime.utcnow().strftime('%Y-%m-%d')
 
     return render_template('purchase.html', products=products, suppliers=suppliers, today=today)
 
@@ -737,17 +741,21 @@ def pos():
 
 
 # (only the api_sale function is shown — replace the existing api_sale in routes/core.py with this)
+# Update the api_sale function (around line 700)
+
 @core_bp.route('/api/sale', methods=['POST'])
 def api_sale():
+    # Import FIFO utilities at the top of the function
+    from routes.fifo_utils import consume_inventory_fifo
+    
     data = request.json or {}
     items = data.get('items', [])
     sale_is_vatable = bool(data.get('is_vatable', False))
     doc_type = data.get('doc_type', 'Invoice')
     discount = data.get('discount') or {}
-    discount_type = discount.get('type') or None  # 'percent' or 'fixed'
+    discount_type = discount.get('type') or None
     discount_input = float(discount.get('input_value') or 0) if discount.get('input_value') is not None else 0.0
 
-    # Read customer_name (frontend sets to 'Walk-in' if empty)
     customer_name = (data.get('customer_name') or '').strip() or 'Walk-in'
 
     if not items:
@@ -758,7 +766,6 @@ def api_sale():
         if not profile:
             return jsonify({'error': 'Company profile not set up in settings'}), 500
 
-        # Invoice numbering
         if not hasattr(profile, 'next_invoice_number') or profile.next_invoice_number is None:
             profile.next_invoice_number = max(getattr(profile, 'next_or_number', 1) or 1,
                                               getattr(profile, 'next_si_number', 1) or 1)
@@ -767,16 +774,14 @@ def api_sale():
         profile.next_invoice_number += 1
         full_doc_number = f"INV-{doc_num:06d}"
 
-        # create sale (we will set totals after calculations)
         sale = Sale(total=0, vat=0, document_number=full_doc_number, document_type=doc_type,
                     is_vatable=sale_is_vatable, customer_name=customer_name,
                     discount_type=discount_type, discount_input=discount_input)
         db.session.add(sale)
         db.session.flush()
 
-        # --- VAT-INCLUSIVE pricing: treat product.sale_price as GROSS (includes VAT) ---
-        subtotal_gross = 0.0   # sum of gross line totals (price * qty)
-        cogs_total = 0.0
+        subtotal_gross = 0.0
+        total_cogs = 0.0  # ✅ This will now be calculated via FIFO
         processed = []
 
         for it in items:
@@ -797,23 +802,32 @@ def api_sale():
                 db.session.rollback()
                 return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
-            # unit_price is GROSS price (includes VAT)
             unit_price = float(product.sale_price)
             line_gross = round(unit_price * qty, 2)
-            cogs = qty * product.cost_price
+            
+            # ✅ FIFO CHANGE: Calculate COGS using FIFO instead of weighted average
+            try:
+                line_cogs, _ = consume_inventory_fifo(
+                    product_id=product.id,
+                    quantity_needed=qty,
+                    sale_id=sale.id,
+                    sale_item_id=None  # Will be set after creating SaleItem
+                )
+            except ValueError as e:
+                db.session.rollback()
+                return jsonify({'error': str(e)}), 400
 
             processed.append({
                 'product': product,
                 'qty': qty,
                 'unit_price': unit_price,
                 'line_gross': line_gross,
-                'cogs': cogs
+                'cogs': line_cogs  # ✅ Using FIFO COGS
             })
 
             subtotal_gross += line_gross
-            cogs_total += cogs
+            total_cogs += line_cogs
 
-        # Compute discount resolved_value (server-side) applied to gross subtotal
         resolved_discount = 0.0
         if discount_type and discount_input:
             if discount_type == 'percent':
@@ -822,28 +836,25 @@ def api_sale():
             else:
                 resolved_discount = round(min(subtotal_gross, float(discount_input)), 2)
 
-        # Discounted gross (amount customer pays, still gross)
         discounted_gross = round(max(0.0, subtotal_gross - resolved_discount), 2)
 
-        # Compute VAT by extracting from the discounted gross (VAT-inclusive pricing)
         if sale_is_vatable:
             vat_after = round(discounted_gross * (VAT_RATE / (1 + VAT_RATE)), 2)
         else:
             vat_after = 0.0
 
         net_sales_after = round(discounted_gross - vat_after, 2)
-        total_amount = discounted_gross  # amount customer pays
+        total_amount = discounted_gross
 
-        # Persist sale totals
         sale.discount_value = resolved_discount
         sale.total = total_amount
         sale.vat = vat_after
         db.session.flush()
 
-        # Insert sale items and deduct stock (store original gross line totals for trace)
+        # Insert sale items and deduct stock
         for p in processed:
             product = p['product']
-            db.session.add(SaleItem(
+            sale_item = SaleItem(
                 sale_id=sale.id,
                 product_id=product.id,
                 product_name=product.name,
@@ -851,12 +862,12 @@ def api_sale():
                 qty=p['qty'],
                 unit_price=p['unit_price'],
                 line_total=p['line_gross'],
-                cogs=p['cogs']
-            ))
+                cogs=p['cogs']  # ✅ Using FIFO COGS
+            )
+            db.session.add(sale_item)
             product.quantity -= p['qty']
 
-        # --- Journal Entry (balanced for VAT-INCLUSIVE with Discounts Allowed) ---
-        # Compute VAT before discount from subtotal_gross (for posting sales revenue at gross net before discount)
+        # Journal Entry (same logic as before)
         if sale_is_vatable:
             vat_before = round(subtotal_gross * (VAT_RATE / (1 + VAT_RATE)), 2)
         else:
@@ -864,43 +875,33 @@ def api_sale():
         gross_net_before = round(subtotal_gross - vat_before, 2)
 
         je_lines = []
-        # Debit Cash = discounted_gross (amount received)
         je_lines.append({'account_code': get_system_account_code('Cash'), 'debit': float(total_amount), 'credit': 0})
-        # Debit Discounts Allowed = resolved_discount (contra-revenue)
         discount_acc_code = get_system_account_code('Discounts Allowed')
         if resolved_discount and resolved_discount > 0:
             je_lines.append({'account_code': discount_acc_code, 'debit': float(resolved_discount), 'credit': 0})
-        # Debit COGS
-        if cogs_total and cogs_total > 0:
-            je_lines.append({'account_code': get_system_account_code('COGS'), 'debit': float(cogs_total), 'credit': 0})
+        if total_cogs and total_cogs > 0:
+            je_lines.append({'account_code': get_system_account_code('COGS'), 'debit': float(total_cogs), 'credit': 0})
 
-        # Credit Sales Revenue = gross_net_before (net of VAT before discount)
         je_lines.append({'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': float(gross_net_before)})
 
-        # Credit VAT Payable = vat_after (VAT computed on discounted gross)
         if vat_after and vat_after > 0:
             je_lines.append({'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': float(vat_after)})
 
-        # Credit Inventory = cogs_total
-        if cogs_total and cogs_total > 0:
-            je_lines.append({'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': float(cogs_total)})
+        if total_cogs and total_cogs > 0:
+            je_lines.append({'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': float(total_cogs)})
 
-        # Make sure JE balances: (Cash + Discounts Allowed + COGS) == (Sales Revenue + VAT Payable + Inventory)
         total_debits = sum(float(l.get('debit', 0) or 0) for l in je_lines)
         total_credits = sum(float(l.get('credit', 0) or 0) for l in je_lines)
 
-        # Small rounding adjustment attempt (absorb into Discounts Allowed or Cash)
         rounding_diff = round(total_debits - total_credits, 2)
         if abs(rounding_diff) >= 0.01:
             adjusted = False
-            # Try adjust Discounts Allowed if present
             for l in je_lines:
                 if l.get('account_code') == discount_acc_code and l.get('debit', 0) >= abs(rounding_diff):
                     l['debit'] = round(l['debit'] - rounding_diff, 2)
                     adjusted = True
                     break
             if not adjusted:
-                # Fallback: adjust Cash
                 cash_code = get_system_account_code('Cash')
                 for l in je_lines:
                     if l.get('account_code') == cash_code:
@@ -1481,3 +1482,29 @@ def audit_log():
     page = request.args.get('page', 1, type=int)
     logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).paginate(page=page, per_page=25)
     return render_template('audit_log.html', logs=logs)
+
+
+# Add this new route
+
+@core_bp.route('/inventory/lots/<int:product_id>')
+@login_required
+@role_required('Admin', 'Accountant')
+def inventory_lots(product_id):
+    """View FIFO inventory lots for a specific product"""
+    from routes.fifo_utils import get_inventory_lots_summary, reconcile_inventory_lots
+    
+    product = Product.query.get_or_404(product_id)
+    lots = get_inventory_lots_summary(product_id)
+    reconciliation = reconcile_inventory_lots(product_id)
+    
+    total_qty = sum(lot['quantity'] for lot in lots)
+    total_value = sum(lot['total_value'] for lot in lots)
+    avg_cost = total_value / total_qty if total_qty > 0 else 0.0
+    
+    return render_template('inventory_lots.html',
+                         product=product,
+                         lots=lots,
+                         total_qty=total_qty,
+                         total_value=total_value,
+                         avg_cost=avg_cost,
+                         reconciliation=reconciliation)

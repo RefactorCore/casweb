@@ -347,36 +347,30 @@ def credit_memos():
     return render_template('credit_memos.html', memos=memos, customers=customers, invoices=invoices)
 
 
+# Update the billing_invoices function (around line 354)
+
 @ar_ap_bp.route('/billing-invoices', methods=['GET', 'POST'])
 @login_required
 @role_required('Admin', 'Accountant')
 def billing_invoices():
-    """
-    Create product-based billing invoices for credit sales (utang).
-    Supports both VAT and Non-VAT items.
-    Creates proper journal entries and reduces inventory.
-    """
     from models import Product, ARInvoiceItem
     from datetime import datetime, timedelta
+    from routes.fifo_utils import consume_inventory_fifo  # ✅ Add this import
     
     if request.method == 'POST':
         try:
-            # Get form data
             customer_id = int(request.form.get('customer_id') or 0)
             description = request.form.get('description', '')
             is_vatable = request.form.get('is_vatable') == 'true'
             
-            # ADD THIS - Get due date or calculate from payment terms
             due_date_str = request.form.get('due_date')
             if due_date_str:
                 due_date = datetime.strptime(due_date_str, '%Y-%m-%d')
             else:
-                # Calculate due date based on customer payment terms
                 customer = Customer.query.get(customer_id)
                 payment_terms = customer.payment_terms_days if customer and hasattr(customer, 'payment_terms_days') else 30
                 due_date = datetime.utcnow() + timedelta(days=payment_terms)
             
-            # Get line items
             product_ids = request.form.getlist('product_id[]')
             quantities = request.form.getlist('quantity[]')
             unit_prices = request.form.getlist('unit_price[]')
@@ -390,7 +384,6 @@ def billing_invoices():
                 flash('Please add at least one product', 'danger')
                 return redirect(url_for('ar_ap.billing_invoices'))
             
-            # Calculate totals and validate inventory
             line_items = []
             subtotal = 0.0
             total_vat = 0.0
@@ -402,28 +395,33 @@ def billing_invoices():
                 unit_price = float(unit_prices[i])
                 line_is_vatable = line_vatables[i] == 'true'
                 
-                # Get product
                 product = Product.query.get(product_id)
                 if not product:
                     flash(f'Product ID {product_id} not found', 'danger')
                     return redirect(url_for('ar_ap.billing_invoices'))
                 
-                # Check inventory
                 if product.quantity < qty:
                     flash(f'Insufficient stock for {product.name}. Available: {product.quantity}, Requested: {qty}', 'danger')
                     return redirect(url_for('ar_ap.billing_invoices'))
                 
-                # Calculate line total
                 line_total = qty * unit_price
                 line_vat = 0.0
                 
                 if line_is_vatable:
-                    # Calculate VAT (12% of net amount)
                     net_amount = line_total / 1.12
                     line_vat = line_total - net_amount
                 
-                # Calculate COGS
-                line_cogs = qty * product.cost_price
+                # ✅ FIFO CHANGE: Calculate COGS using FIFO
+                try:
+                    line_cogs, _ = consume_inventory_fifo(
+                        product_id=product.id,
+                        quantity_needed=qty,
+                        ar_invoice_id=None,  # Will be set after creating invoice
+                        ar_invoice_item_id=None
+                    )
+                except ValueError as e:
+                    flash(str(e), 'danger')
+                    return redirect(url_for('ar_ap.billing_invoices'))
                 
                 line_items.append({
                     'product_id': product_id,
@@ -432,7 +430,7 @@ def billing_invoices():
                     'qty': qty,
                     'unit_price': unit_price,
                     'line_total': line_total,
-                    'cogs': line_cogs,
+                    'cogs': line_cogs,  # ✅ Using FIFO COGS
                     'is_vatable': line_is_vatable
                 })
                 
@@ -440,10 +438,8 @@ def billing_invoices():
                 total_vat += line_vat
                 total_cogs += line_cogs
             
-            # Create AR Invoice
             invoice_total = subtotal
             
-            # Generate invoice number
             from models import CompanyProfile
             company = CompanyProfile.query.first()
             if company:
@@ -461,12 +457,11 @@ def billing_invoices():
                 is_vatable=is_vatable,
                 invoice_number=invoice_number,
                 description=description,
-                due_date=due_date  # ADD THIS LINE
+                due_date=due_date
             )
             db.session.add(ar_invoice)
             db.session.flush()
             
-            # Create line items and reduce inventory
             for item in line_items:
                 ar_item = ARInvoiceItem(
                     ar_invoice_id=ar_invoice.id,
@@ -476,37 +471,32 @@ def billing_invoices():
                     qty=item['qty'],
                     unit_price=item['unit_price'],
                     line_total=item['line_total'],
-                    cogs=item['cogs'],
+                    cogs=item['cogs'],  # ✅ Using FIFO COGS
                     is_vatable=item['is_vatable']
                 )
                 db.session.add(ar_item)
                 
-                # ✅ FIX: Reduce inventory for THIS specific product
                 product = Product.query.get(item['product_id'])
-                if product:  # Safety check
+                if product:
                     product.quantity -= item['qty']
-                    db.session.flush()  # ✅ Ensure changes are persisted immediately
+                    db.session.flush()
 
-            db.session.flush()  # Flush all ARInvoiceItems
+            db.session.flush()
             
-            # Create Journal Entry
             je_lines = []
             
-            # Debit Accounts Receivable (total)
             je_lines.append({
                 'account_code': get_system_account_code('Accounts Receivable'),
                 'debit': round(invoice_total, 2),
                 'credit': 0
             })
             
-            # Credit Sales Revenue (total - VAT)
             je_lines.append({
                 'account_code': get_system_account_code('Sales Revenue'),
                 'debit': 0,
                 'credit': round(invoice_total - total_vat, 2)
             })
             
-            # Credit VAT Payable (if vatable)
             if total_vat > 0:
                 je_lines.append({
                     'account_code': get_system_account_code('VAT Payable'),
@@ -514,14 +504,12 @@ def billing_invoices():
                     'credit': round(total_vat, 2)
                 })
             
-            # Debit COGS
             je_lines.append({
                 'account_code': get_system_account_code('COGS'),
                 'debit': round(total_cogs, 2),
                 'credit': 0
             })
             
-            # Credit Inventory
             je_lines.append({
                 'account_code': get_system_account_code('Inventory'),
                 'debit': 0,
@@ -545,12 +533,10 @@ def billing_invoices():
             flash(f'Error creating billing invoice: {str(e)}', 'danger')
             return redirect(url_for('ar_ap.billing_invoices'))
     
-    # GET request - display list of billing invoices
     invoices = ARInvoice.query.filter(ARInvoice.items.any()).order_by(ARInvoice.date.desc()).all()
     customers = Customer.query.order_by(Customer.name).all()
     products_query = Product.query.filter_by(is_active=True).order_by(Product.name).all()
     
-    # Convert products to dictionaries for JSON serialization
     products_list = []
     for p in products_query:
         products_list.append({
