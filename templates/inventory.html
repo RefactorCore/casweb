@@ -95,6 +95,11 @@
                 {% endif %}
               </td>
               <td>
+                <a href="{{ url_for('core.inventory_lots', product_id=p.id) }}" 
+                   class="btn btn-sm btn-outline-primary" 
+                   title="View FIFO Lots">
+                    <i class="bi bi-layers"></i>
+                </a>
                 <a href="{{ url_for('reports.stock_card', product_id=p.id) }}" class="btn btn-sm btn-outline-info" title="View Stock Card">
                     <i class="bi bi-card-list"></i>
                 </a>
