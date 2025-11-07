@@ -79,11 +79,10 @@ def index():
     products = Product.query.all()
     low_stock = [p for p in products if p.quantity <= 5 and p.is_active]
 
-    # --- NEW: Filter inventory value to only include active products ---
+    # --- Filter inventory value to only include active products ---
     active_products = [p for p in products if p.is_active]
     total_inventory_value = sum(p.cost_price * p.quantity for p in active_products)
     products_in_stock = Product.query.filter(Product.quantity > 0, Product.is_active == True).count()
-    # --- END OF NEW ---
 
     # --- Get period filter (default to '7' days) ---
     period = request.args.get('period', '7')
@@ -100,10 +99,8 @@ def index():
         current_filter_label = 'Last 30 Days'
     elif period == 'all':
         current_filter_label = 'All Time'
-        # start_date remains None, so queries won't be filtered
     else:
-        # Default to 7 Days
-        period = '7' # Explicitly set for the button highlighting
+        period = '7'
         start_date = today - timedelta(days=7)
         current_filter_label = 'Last 7 Days'
 
@@ -118,7 +115,7 @@ def index():
     # --- Execute FILTERED queries ---
     total_sales = sales_query.scalar() or 0
     total_purchases = purchases_query.scalar() or 0
-    net_income = total_sales - total_purchases # This is now also filtered
+    net_income = total_sales - total_purchases
 
     # --- Charting Logic ---
     sales_by_period = []
@@ -136,8 +133,7 @@ def index():
             days = 30
         elif period == '7':
             days = 7
-        else: # 'all'
-            # For 'All Time', let's default to a 90-day chart view so it's not overwhelming
+        else:
             days = 90
             
         today_date = datetime.utcnow().date()
@@ -147,7 +143,7 @@ def index():
             sales_by_period.append(day_total)
             labels.append(day.strftime('%b %d'))
             
-    # --- Top Sellers (This is still all-time, which is usually OK) ---
+    # --- Top Sellers ---
     top_sellers = (
         db.session.query(
             Product.name,
@@ -160,23 +156,99 @@ def index():
         .all()
     )
 
+    # ✅ UPDATED: DUE DATES DASHBOARD DATA (AR & AP Invoices)
+    from models import ARInvoice, APInvoice, Customer, Supplier
+    
+    # Get unpaid AR invoices with due dates (money we need to COLLECT)
+    ar_due = ARInvoice.query.filter(
+        ARInvoice.status != 'Paid',
+        ARInvoice.due_date.isnot(None)
+    ).order_by(ARInvoice.due_date.asc()).limit(10).all()
+    
+    # ✅ NEW: Get unpaid AP invoices with due dates (money we need to PAY)
+    ap_due = APInvoice.query.filter(
+        APInvoice.status != 'Paid',
+        APInvoice.due_date.isnot(None)
+    ).order_by(APInvoice.due_date.asc()).limit(10).all()
+    
+    # Combine and categorize by urgency
+    due_items = []
+    
+    # Process AR Invoices (Receivables - money coming IN)
+    for inv in ar_due:
+        days_until_due = (inv.due_date - today).days if inv.due_date else 999
+        balance = inv.total - inv.paid
+        
+        if balance <= 0:
+            continue
+            
+        urgency = 'overdue' if days_until_due < 0 else ('due_soon' if days_until_due <= 7 else 'upcoming')
+        
+        due_items.append({
+            'type': 'AR Invoice',
+            'id': inv.id,
+            'number': inv.invoice_number or f"AR-{inv.id}",
+            'party': inv.customer.name if inv.customer else 'N/A',
+            'amount': balance,
+            'due_date': inv.due_date,
+            'days_until_due': days_until_due,
+            'urgency': urgency,
+            'description': inv.description or '',
+            'url': url_for('ar_ap.billing_invoices'),
+            'direction': 'receivable'  # Money coming IN
+        })
+    
+    # ✅ NEW: Process AP Invoices (Payables - money going OUT)
+    for inv in ap_due:
+        days_until_due = (inv.due_date - today).days if inv.due_date else 999
+        balance = inv.total - inv.paid
+        
+        if balance <= 0:
+            continue
+            
+        urgency = 'overdue' if days_until_due < 0 else ('due_soon' if days_until_due <= 7 else 'upcoming')
+        
+        due_items.append({
+            'type': 'AP Invoice',
+            'id': inv.id,
+            'number': inv.invoice_number or f"AP-{inv.id}",
+            'party': inv.supplier.name if inv.supplier else 'N/A',
+            'amount': balance,
+            'due_date': inv.due_date,
+            'days_until_due': days_until_due,
+            'urgency': urgency,
+            'description': inv.description or '',
+            'url': url_for('ar_ap.ap_invoices'),
+            'direction': 'payable'  # Money going OUT
+        })
+    
+    # Sort by due date (most urgent first)
+    due_items.sort(key=lambda x: (x['urgency'] != 'overdue', x['urgency'] != 'due_soon', x['days_until_due']))
+    
+    # Categorize for display
+    overdue_items = [item for item in due_items if item['urgency'] == 'overdue']
+    due_soon_items = [item for item in due_items if item['urgency'] == 'due_soon']
+    upcoming_items = [item for item in due_items if item['urgency'] == 'upcoming'][:5]
+    # ✅ END OF UPDATED BLOCK
+
     return render_template(
         'index.html',
         products=products,
         low_stock=low_stock,
-        # --- Pass the new DYNAMIC totals ---
         total_sales=total_sales,
         total_purchases=total_purchases,
         net_income=net_income,
-        # --- Pass the STATIC (all-time) inventory values ---
         total_inventory_value=total_inventory_value,
         products_in_stock=products_in_stock,
-        # --- Pass the filter and chart data ---
         labels=labels,
         sales_by_day=sales_by_period,
         top_sellers=top_sellers,
         current_period_filter=period,
-        current_filter_label=current_filter_label
+        current_filter_label=current_filter_label,
+        # Pass due dates data to template
+        overdue_items=overdue_items,
+        due_soon_items=due_soon_items,
+        upcoming_items=upcoming_items
     )
 
 @login_required
@@ -1005,21 +1077,7 @@ def sales():
     cash_sales_query = Sale.query
     ar_invoices_query = ARInvoice.query
 
-    # Apply search filters
-    if search:
-        cash_sales_query = cash_sales_query.filter(
-            (Sale.customer_name.ilike(f"%{search}%")) |
-            (Sale.id.cast(db.String).ilike(f"%{search}%")) |
-            (Sale.document_number.ilike(f"%{search}%"))
-        )
-        ar_invoices_query = ar_invoices_query.join(Customer, ARInvoice.customer_id == Customer.id, isouter=True).filter(
-            (Customer.name.ilike(f"%{search}%")) |
-            (ARInvoice.invoice_number.ilike(f"%{search}%")) |
-            (ARInvoice.description.ilike(f"%{search}%")) |
-            (ARInvoice.id.cast(db.String).ilike(f"%{search}%"))
-        )
-    
-    # ✅ Apply date filters (FIXED)
+    # ✅ FIXED: Apply date filters BEFORE search (more efficient)
     if start_date:
         cash_sales_query = cash_sales_query.filter(Sale.created_at >= start_date)
         ar_invoices_query = ar_invoices_query.filter(ARInvoice.date >= start_date)
@@ -1028,7 +1086,8 @@ def sales():
         cash_sales_query = cash_sales_query.filter(Sale.created_at < end_date)
         ar_invoices_query = ar_invoices_query.filter(ARInvoice.date < end_date)
 
-    # Get all results
+    # ✅ FIXED: Simplified search - search happens AFTER combining results
+    # Get all results first
     cash_sales = cash_sales_query.all()
     billing_invoices = ar_invoices_query.all()
 
@@ -1068,6 +1127,20 @@ def sales():
             'balance': inv.total - inv.paid,
             'created_at': inv.date
         })
+    
+    # ✅ NEW: Apply search filter AFTER combining (searches across all fields)
+    if search:
+        search_lower = search.lower()
+        all_sales = [
+            s for s in all_sales 
+            if (
+                search_lower in str(s['id']).lower() or
+                search_lower in s['type'].lower() or
+                search_lower in s['document_number'].lower() or
+                search_lower in s['customer_name'].lower() or
+                search_lower in s['status'].lower()
+            )
+        ]
     
     # Sort by date descending
     all_sales.sort(key=lambda x: x['date'], reverse=True)
@@ -1113,8 +1186,8 @@ def sales():
         summary=summary,
         pagination=pagination,
         search=search,
-        start_date=start_date_str,  # ✅ Pass back original string for form
-        end_date=end_date_str        # ✅ Pass back original string for form
+        start_date=start_date_str,
+        end_date=end_date_str
     )
 
 
