@@ -491,6 +491,43 @@ def api_add_multiple_products():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+# Add this route (around line 1100, near other API routes)
+
+@core_bp.route('/api/products/search')
+def api_products_search():
+    """
+    Search products by SKU or name for purchase lookup.
+    Returns JSON array of matching products.
+    """
+    query = request.args.get('q', '').strip()
+    
+    if query == '':
+        # Return all active products if no search query (limited to 100)
+        products = Product.query.filter_by(is_active=True)\
+            .order_by(Product.name.asc())\
+            .limit(100)\
+            .all()
+    else:
+        # Search by SKU or name
+        products = Product.query.filter(
+            (Product.sku.ilike(f'%{query}%')) |
+            (Product.name.ilike(f'%{query}%'))
+        ).filter_by(is_active=True)\
+        .order_by(Product.name.asc())\
+        .limit(50)\
+        .all()
+    
+    results = [{
+        'id': p.id,
+        'sku': p.sku,
+        'name': p.name,
+        'quantity': p.quantity,
+        'cost_price': float(p.cost_price),
+        'sale_price': float(p.sale_price)
+    } for p in products]
+    
+    return jsonify(results)
+
 # Update the purchase function (around line 430)
 
 @core_bp.route('/purchase', methods=['GET', 'POST'])
