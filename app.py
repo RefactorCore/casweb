@@ -72,12 +72,14 @@ def create_app():
     from routes.ar_ap import ar_ap_bp
     from routes.reports import reports_bp
     from routes.users import user_bp
+    from routes.consignment import consignment_bp
 
 
     app.register_blueprint(core_bp)
     app.register_blueprint(ar_ap_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(user_bp)
+    app.register_blueprint(consignment_bp)
 
     return app
 
@@ -91,13 +93,16 @@ def seed_essential_data(app):
         ('110', 'Accounts Receivable', 'Asset'),
         ('120','Inventory','Asset'),
         ('121', 'Creditable Withholding Tax', 'Asset'),
+        ('132', 'Consignment Goods on Hand', 'Asset'),
         ('201','Accounts Payable','Liability'),
+        ('220', 'Consignment Payable', 'Liability'), 
         ('301','Capital','Equity'),
         ('302', 'Opening Balance Equity', 'Equity'),
         ('401','Sales Revenue','Revenue'),
         ('402','Other Revenue','Revenue'),
         ('405', 'Sales Returns', 'Revenue'),
         ('407', 'Discounts Allowed', 'Expense'),
+        ('408', 'Consignment Commission Revenue', 'Revenue'),
         ('501','COGS','Expense'),
         ('601','VAT Payable','Liability'),
         ('602','VAT Input','Asset'),

@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from datetime import datetime
+from sqlalchemy import func
 import json
 
 db = SQLAlchemy()
@@ -15,6 +16,7 @@ class CompanyProfile(db.Model):
     next_or_number = db.Column(db.Integer, default=1)
     next_si_number = db.Column(db.Integer, default=1)
     next_invoice_number = db.Column(db.Integer, default=1)
+    next_consignment_number = db.Column(db.Integer, default=1)
 
 class Account(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -109,7 +111,7 @@ class Sale(db.Model):
 class SaleItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sale_id = db.Column(db.Integer, db.ForeignKey('sale.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=True)  # ✅ Allow NULL for consignment
     product_name = db.Column(db.String(200))
     sku = db.Column(db.String(64))
     qty = db.Column(db.Integer, nullable=False)
@@ -287,3 +289,217 @@ class RecurringBill(db.Model):
     frequency = db.Column(db.String(50)) # e.g., 'monthly', 'quarterly'
     next_due_date = db.Column(db.DateTime)
     is_active = db.Column(db.Boolean, default=True)
+
+    # Add these models to your existing models.py file
+
+class ConsignmentSupplier(db.Model):
+    """Suppliers who consign goods to you (Consignors)"""
+    __tablename__ = 'consignment_supplier'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False, unique=True)
+    business_type = db.Column(db.String(100))  # e.g., "Manufacturer", "Distributor"
+    tin = db.Column(db.String(50))
+    address = db.Column(db.String(300))
+    contact_person = db.Column(db.String(200))
+    phone = db.Column(db.String(50))
+    email = db.Column(db.String(100))
+    
+    # Commission you earn for selling their goods
+    default_commission_rate = db.Column(db.Float, default=15.0)  # % (e.g., 15%)
+    
+    # Payment terms (how often you remit to them)
+    payment_terms_days = db.Column(db.Integer, default=30)  # e.g., every 30 days
+    
+    is_active = db.Column(db.Boolean, default=True)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    consignments = db.relationship('ConsignmentReceived', backref='supplier', lazy='dynamic')
+
+class ConsignmentReceived(db.Model):
+    """Goods received on consignment (YOU are the Consignee/Retailer)"""
+    __tablename__ = 'consignment_received'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    receipt_number = db.Column(db.String(50), unique=True, nullable=False)
+    
+    supplier_id = db.Column(db.Integer, db.ForeignKey('consignment_supplier.id'), nullable=False)
+    
+    date_received = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    expected_return_date = db.Column(db.DateTime, nullable=True)
+    
+    # Commission rate for this specific consignment
+    commission_rate = db.Column(db.Float, default=15.0)
+    
+    total_items = db.Column(db.Integer, default=0)
+    total_value = db.Column(db.Float, default=0.0)  # Total retail value
+    
+    status = db.Column(db.String(50), default='Active', nullable=False)
+    # Status: Active, Partial (some sold), Closed (all sold/returned), Cancelled
+    
+    notes = db.Column(db.Text)
+    
+    # Relationships
+    items = db.relationship('ConsignmentItem', backref='consignment', cascade='all, delete-orphan', lazy='dynamic')
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_by = db.relationship('User')
+    
+    def get_total_sold_value(self):
+        """Calculate total value of items sold"""
+        sold = db.session.query(func.sum(ConsignmentItem.quantity_sold * ConsignmentItem.retail_price))\
+            .filter(ConsignmentItem.consignment_id == self.id).scalar()
+        return sold or 0.0
+    
+    def get_commission_earned(self):
+        """Calculate commission earned on sold items"""
+        sold_value = self.get_total_sold_value()
+        return round(sold_value * (self.commission_rate / 100), 2)
+    
+    def get_amount_due_to_supplier(self):
+        """Calculate amount to remit to supplier (sales - commission)"""
+        sold_value = self.get_total_sold_value()
+        commission = self.get_commission_earned()
+        return round(sold_value - commission, 2)
+
+class ConsignmentItem(db.Model):
+    """Individual consigned products (NOT in your regular inventory)"""
+    __tablename__ = 'consignment_item'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    consignment_id = db.Column(db.Integer, db.ForeignKey('consignment_received.id'), nullable=False)
+    
+    # Product info (separate from your regular products)
+    sku = db.Column(db.String(64), nullable=False)  # Supplier's SKU
+    product_name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.String(500))
+    barcode = db.Column(db.String(100))  # For scanning in POS
+    
+    # Quantities
+    quantity_received = db.Column(db.Integer, nullable=False)
+    quantity_sold = db.Column(db.Integer, default=0)
+    quantity_returned = db.Column(db.Integer, default=0)
+    quantity_damaged = db.Column(db.Integer, default=0)
+    
+    # Pricing
+    retail_price = db.Column(db.Float, nullable=False)  # Agreed selling price
+    
+    is_active = db.Column(db.Boolean, default=True)  # Can be sold in POS
+    
+    @property
+    def quantity_available(self):
+        """Calculate available quantity for sale"""
+        return self.quantity_received - self.quantity_sold - self.quantity_returned - self.quantity_damaged
+    
+    def to_dict(self):
+        """Convert to dict for POS JSON"""
+        return {
+            'id': self.id,
+            'sku': self.sku,
+            'name': self.product_name,
+            'price': float(self.retail_price),
+            'quantity': self.quantity_available,
+            'is_consignment': True,
+            'consignment_id': self.consignment_id
+        }
+
+class ConsignmentSale(db.Model):
+    """Track individual sales of consigned goods"""
+    __tablename__ = 'consignment_sale'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    consignment_id = db.Column(db.Integer, db.ForeignKey('consignment_received.id'), nullable=False)
+    consignment = db.relationship('ConsignmentReceived')
+    
+    # Link to regular sale (if sold through POS)
+    sale_id = db.Column(db.Integer, db.ForeignKey('sale.id'), nullable=True)
+    sale = db.relationship('Sale')
+    
+    sale_date = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    
+    total_amount = db.Column(db.Float, nullable=False)  # Retail value
+    commission_rate = db.Column(db.Float, nullable=False)
+    commission_amount = db.Column(db.Float, nullable=False)
+    amount_due_to_supplier = db.Column(db.Float, nullable=False)  # Total - Commission
+    
+    vat = db.Column(db.Float, default=0.0)
+    is_vatable = db.Column(db.Boolean, default=True)
+    
+    payment_status = db.Column(db.String(50), default='Pending')  # Pending, Paid
+    
+    items = db.relationship('ConsignmentSaleItem', backref='consignment_sale', cascade='all, delete-orphan')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ConsignmentSaleItem(db.Model):
+    """Line items for consignment sales"""
+    __tablename__ = 'consignment_sale_item'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    consignment_sale_id = db.Column(db.Integer, db.ForeignKey('consignment_sale.id'), nullable=False)
+    consignment_item_id = db.Column(db.Integer, db.ForeignKey('consignment_item.id'), nullable=False)
+    consignment_item = db.relationship('ConsignmentItem')
+    
+    quantity_sold = db.Column(db.Integer, nullable=False)
+    unit_price = db.Column(db.Float, nullable=False)
+    line_total = db.Column(db.Float, nullable=False)
+
+class ConsignmentPayment(db.Model):
+    """Track payments remitted to consignors"""
+    __tablename__ = 'consignment_payment'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    payment_number = db.Column(db.String(50), unique=True)
+    
+    supplier_id = db.Column(db.Integer, db.ForeignKey('consignment_supplier.id'), nullable=False)
+    supplier = db.relationship('ConsignmentSupplier')
+    
+    payment_date = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    
+    # Amounts
+    total_sales = db.Column(db.Float, nullable=False)  # Gross sales
+    commission_amount = db.Column(db.Float, nullable=False)  # Your commission
+    wht_amount = db.Column(db.Float, default=0.0)  # Withholding tax (if applicable)
+    net_payment = db.Column(db.Float, nullable=False)  # Sales - Commission - WHT
+    
+    payment_method = db.Column(db.String(50))  # Cash, Bank, Check
+    reference_number = db.Column(db.String(100))  # Bank ref, check number
+    
+    notes = db.Column(db.Text)
+    
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_by = db.relationship('User')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ConsignmentReturn(db.Model):
+    """Track returns of unsold consignment goods to supplier"""
+    __tablename__ = 'consignment_return'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    return_number = db.Column(db.String(50), unique=True)
+    
+    consignment_id = db.Column(db.Integer, db.ForeignKey('consignment_received.id'), nullable=False)
+    consignment = db.relationship('ConsignmentReceived')
+    
+    return_date = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    reason = db.Column(db.String(300))
+    
+    items = db.relationship('ConsignmentReturnItem', backref='consignment_return', cascade='all, delete-orphan')
+    
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    created_by = db.relationship('User')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ConsignmentReturnItem(db.Model):
+    """Line items for consignment returns"""
+    __tablename__ = 'consignment_return_item'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    consignment_return_id = db.Column(db.Integer, db.ForeignKey('consignment_return.id'), nullable=False)
+    consignment_item_id = db.Column(db.Integer, db.ForeignKey('consignment_item.id'), nullable=False)
+    consignment_item = db.relationship('ConsignmentItem')
+    
+    quantity_returned = db.Column(db.Integer, nullable=False)
+    reason = db.Column(db.String(300))
