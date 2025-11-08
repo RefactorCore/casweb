@@ -823,25 +823,90 @@ def view_purchase(purchase_id):
 @login_required
 @role_required('Admin', 'Cashier')
 def pos():
+    from models import ConsignmentItem
+    
     # --- Handle GET (view with pagination and search) ---
     search = request.args.get('search', '').strip()
-    query = Product.query.filter_by(is_active=True)
-
+    
+    # Query regular products
+    product_query = Product.query.filter_by(is_active=True)
+    
+    # Query consignment items
+    consignment_query = ConsignmentItem.query.filter_by(is_active=True)
+    
     if search:
-        query = query.filter(
+        product_query = product_query.filter(
             (Product.name.ilike(f"%{search}%")) |
             (Product.sku.ilike(f"%{search}%"))
         )
-
-    # Order and paginate (you can adjust per_page)
-    query = query.order_by(Product.name.asc())
-    pagination = paginate_query(query, per_page=12) 
-
+        consignment_query = consignment_query.filter(
+            (ConsignmentItem.product_name.ilike(f"%{search}%")) |
+            (ConsignmentItem.sku.ilike(f"%{search}%")) |
+            (ConsignmentItem.barcode.ilike(f"%{search}%"))
+        )
+    
+    # Get regular products (order by name)
+    products = product_query.order_by(Product.name.asc()).all()
+    
+    # Get consignment items with available quantity
+    consignment_items_raw = consignment_query.all()
+    consignment_items = [item for item in consignment_items_raw if item.quantity_available > 0]
+    
+    # Combine into unified list for display
+    combined_items = []
+    
+    # Add regular products
+    for p in products:
+        combined_items.append({
+            'id': p.id,
+            'sku': p.sku,
+            'name': p.name,
+            'price': p.sale_price,
+            'quantity': p.quantity,
+            'is_consignment': False,
+            'type': 'regular'
+        })
+    
+    # Add consignment items
+    for c in consignment_items:
+        combined_items.append({
+            'id': c.id,
+            'sku': c.sku,
+            'name': c.product_name,
+            'price': c.retail_price,
+            'quantity': c.quantity_available,
+            'is_consignment': True,
+            'consignment_id': c.consignment_id,
+            'type': 'consignment'
+        })
+    
+    # Manual pagination for combined list
+    per_page = 12
+    page = request.args.get('page', 1, type=int)
+    total_items = len(combined_items)
+    total_pages = (total_items + per_page - 1) // per_page if total_items > 0 else 1
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_items = combined_items[start_idx:end_idx]
+    
+    # Create pagination object
+    class Pagination:
+        def __init__(self, page, per_page, total_count, total_pages):
+            self.page = page
+            self.per_page = per_page
+            self.total = total_count
+            self.pages = total_pages
+            self.has_prev = page > 1
+            self.has_next = page < total_pages
+            self.prev_num = page - 1 if self.has_prev else None
+            self.next_num = page + 1 if self.has_next else None
+    
+    pagination = Pagination(page, per_page, total_items, total_pages)
     safe_args = {k: v for k, v in request.args.items() if k != 'page'}
 
     return render_template(
         'pos.html',
-        products=pagination.items,
+        products=paginated_items,
         pagination=pagination,
         search=search,
         safe_args=safe_args,
@@ -890,7 +955,7 @@ def api_sale():
         db.session.flush()
 
         subtotal_gross = 0.0
-        total_cogs = 0.0  # ✅ This will now be calculated via FIFO
+        total_cogs = 0.0
         processed = []
 
         for it in items:
@@ -903,35 +968,67 @@ def api_sale():
                 db.session.rollback()
                 return jsonify({'error': f'Invalid quantity for SKU {sku}'}), 400
 
-            product = Product.query.filter_by(sku=sku).first()
-            if not product:
-                db.session.rollback()
-                return jsonify({'error': f'Product {sku} not found'}), 404
-            if product.quantity < qty:
-                db.session.rollback()
-                return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
+            from models import ConsignmentItem, ConsignmentSale, ConsignmentSaleItem
+            is_consignment = it.get('is_consignment', False)
 
-            unit_price = float(product.sale_price)
-            line_gross = round(unit_price * qty, 2)
-            
-            # ✅ FIFO CHANGE: Calculate COGS using FIFO instead of weighted average
-            try:
-                line_cogs, _ = consume_inventory_fifo(
-                    product_id=product.id,
-                    quantity_needed=qty,
-                    sale_id=sale.id,
-                    sale_item_id=None  # Will be set after creating SaleItem
-                )
-            except ValueError as e:
-                db.session.rollback()
-                return jsonify({'error': str(e)}), 400
+            if is_consignment:
+                # Handle consignment item
+                consignment_item_id = it.get('consignment_item_id')
+                consignment_item = ConsignmentItem.query.get(consignment_item_id)
+                
+                if not consignment_item:
+                    db.session.rollback()
+                    return jsonify({'error': f'Consignment item {sku} not found'}), 404
+                
+                if consignment_item.quantity_available < qty:
+                    db.session.rollback()
+                    return jsonify({'error': f'Insufficient consignment stock for {consignment_item.product_name}'}), 400
+                
+                unit_price = float(consignment_item.retail_price)
+                line_gross = round(unit_price * qty, 2)
+                line_cogs = 0.0  # No COGS for consignment (we don't own it)
+                
+                product_name = consignment_item.product_name
+                product_sku = consignment_item.sku
+                
+            else:
+                # Handle regular product
+                product = Product.query.filter_by(sku=sku).first()
+                if not product:
+                    db.session.rollback()
+                    return jsonify({'error': f'Product {sku} not found'}), 404
+                if product.quantity < qty:
+                    db.session.rollback()
+                    return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
+
+                unit_price = float(product.sale_price)  # ✅ ADD THIS
+                line_gross = round(unit_price * qty, 2) # ✅ ADD THIS
+                
+                # ✅ ADD THIS - Calculate COGS using FIFO
+                try:
+                    line_cogs, _ = consume_inventory_fifo(
+                        product_id=product.id,
+                        quantity_needed=qty,
+                        sale_id=sale.id,
+                        sale_item_id=None
+                    )
+                except ValueError as e:
+                    db.session.rollback()
+                    return jsonify({'error': str(e)}), 400
+                
+                product_name = product.name
+                product_sku = product.sku
 
             processed.append({
-                'product': product,
+                'product': product if not is_consignment else None,
+                'consignment_item': consignment_item if is_consignment else None,
                 'qty': qty,
                 'unit_price': unit_price,
                 'line_gross': line_gross,
-                'cogs': line_cogs  # ✅ Using FIFO COGS
+                'cogs': line_cogs,
+                'is_consignment': is_consignment,
+                'product_name': product_name,
+                'product_sku': product_sku
             })
 
             subtotal_gross += line_gross
@@ -962,43 +1059,133 @@ def api_sale():
 
         # Insert sale items and deduct stock
         for p in processed:
-            product = p['product']
-            sale_item = SaleItem(
-                sale_id=sale.id,
-                product_id=product.id,
-                product_name=product.name,
-                sku=product.sku,
-                qty=p['qty'],
-                unit_price=p['unit_price'],
-                line_total=p['line_gross'],
-                cogs=p['cogs']  # ✅ Using FIFO COGS
-            )
-            db.session.add(sale_item)
-            product.quantity -= p['qty']
+            if p['is_consignment']:
+                # Handle consignment item sale
+                consignment_item = p['consignment_item']
+                
+                # Create sale item (with product_id = None for consignment)
+                sale_item = SaleItem(
+                    sale_id=sale.id,
+                    product_id=None,  # No product_id for consignment items
+                    product_name=p['product_name'],
+                    sku=p['product_sku'],
+                    qty=p['qty'],
+                    unit_price=p['unit_price'],
+                    line_total=p['line_gross'],
+                    cogs=0.0  # No COGS for consignment
+                )
+                db.session.add(sale_item)
+                
+                # Update consignment item quantity
+                consignment_item.quantity_sold += p['qty']
+                
+                # Update consignment status if needed
+                consignment = consignment_item.consignment
+                total_received = sum(item.quantity_received for item in consignment.items)
+                total_sold = sum(item.quantity_sold for item in consignment.items)
+                total_returned = sum(item.quantity_returned for item in consignment.items)
+                
+                if total_sold + total_returned >= total_received:
+                    consignment.status = 'Closed'
+                elif total_sold > 0 or total_returned > 0:
+                    consignment.status = 'Partial'
+                
+            else:
+                # Handle regular product
+                product = p['product']
+                sale_item = SaleItem(
+                    sale_id=sale.id,
+                    product_id=product.id,
+                    product_name=product.name,
+                    sku=product.sku,
+                    qty=p['qty'],
+                    unit_price=p['unit_price'],
+                    line_total=p['line_gross'],
+                    cogs=p['cogs']
+                )
+                db.session.add(sale_item)
+                product.quantity -= p['qty']
 
-        # Journal Entry (same logic as before)
+        # Calculate consignment commission
+        consignment_sales_total = sum(p['line_gross'] for p in processed if p['is_consignment'])
+        consignment_commission_total = 0.0
+
+        if consignment_sales_total > 0:
+            # Group consignment sales by consignment_id
+            consignment_groups = {}
+            for p in processed:
+                if p['is_consignment']:
+                    cons_id = p['consignment_item'].consignment_id
+                    if cons_id not in consignment_groups:
+                        consignment = p['consignment_item'].consignment
+                        consignment_groups[cons_id] = {
+                            'consignment': consignment,
+                            'total': 0.0
+                        }
+                    consignment_groups[cons_id]['total'] += p['line_gross']
+            
+            # Calculate commission for each consignment
+            for cons_id, group in consignment_groups.items():
+                commission_rate = group['consignment'].commission_rate / 100
+                commission = round(group['total'] * commission_rate, 2)
+                consignment_commission_total += commission
+
+        # Journal Entry
+                # Journal Entry
         if sale_is_vatable:
             vat_before = round(subtotal_gross * (VAT_RATE / (1 + VAT_RATE)), 2)
         else:
             vat_before = 0.0
-        gross_net_before = round(subtotal_gross - vat_before, 2)
+        
+        # ✅ CRITICAL FIX: Calculate regular (non-consignment) sales only
+        regular_sales_total = sum(p['line_gross'] for p in processed if not p['is_consignment'])
+        regular_sales_vat = round(regular_sales_total * (VAT_RATE / (1 + VAT_RATE)), 2) if sale_is_vatable else 0.0
+        regular_sales_net = round(regular_sales_total - regular_sales_vat, 2)
 
         je_lines = []
+
+        # Cash received (total amount including both regular and consignment)
         je_lines.append({'account_code': get_system_account_code('Cash'), 'debit': float(total_amount), 'credit': 0})
+
+        # ✅ FIXED: Only record consignment commission revenue (not full sale amount)
+        if consignment_commission_total > 0:
+            je_lines.append({
+                'account_code': get_system_account_code('Consignment Commission Revenue'), 
+                'debit': 0, 
+                'credit': float(consignment_commission_total)
+            })
+
+        # ✅ FIXED: Record consignment payable (amount owed to supplier)
+        if consignment_sales_total > 0:
+            consignment_payable = consignment_sales_total - consignment_commission_total
+            je_lines.append({
+                'account_code': get_system_account_code('Consignment Payable'), 
+                'debit': 0, 
+                'credit': float(consignment_payable)
+            })
+        
+        # Discount (applies to total, both regular and consignment)
         discount_acc_code = get_system_account_code('Discounts Allowed')
         if resolved_discount and resolved_discount > 0:
             je_lines.append({'account_code': discount_acc_code, 'debit': float(resolved_discount), 'credit': 0})
+        
+        # ✅ FIXED: COGS only for regular products (not consignment)
         if total_cogs and total_cogs > 0:
             je_lines.append({'account_code': get_system_account_code('COGS'), 'debit': float(total_cogs), 'credit': 0})
 
-        je_lines.append({'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': float(gross_net_before)})
+        # ✅ CRITICAL FIX: Sales Revenue ONLY for regular products (not consignment)
+        if regular_sales_net > 0:
+            je_lines.append({'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': float(regular_sales_net)})
 
-        if vat_after and vat_after > 0:
-            je_lines.append({'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': float(vat_after)})
+        # ✅ FIXED: VAT only for regular sales (consignment sales already included in total)
+        if sale_is_vatable and regular_sales_vat > 0:
+            je_lines.append({'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': float(regular_sales_vat)})
 
+        # ✅ FIXED: Inventory reduction only for regular products
         if total_cogs and total_cogs > 0:
             je_lines.append({'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': float(total_cogs)})
 
+        # Rounding adjustment (rest of code stays the same)
         total_debits = sum(float(l.get('debit', 0) or 0) for l in je_lines)
         total_credits = sum(float(l.get('credit', 0) or 0) for l in je_lines)
 
