@@ -343,6 +343,8 @@ class ConsignmentReceived(db.Model):
     
     # Relationships
     items = db.relationship('ConsignmentItem', backref='consignment', cascade='all, delete-orphan', lazy='dynamic')
+
+    remittances = db.relationship('ConsignmentRemittance', back_populates='consignment', lazy='dynamic')
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
@@ -503,3 +505,18 @@ class ConsignmentReturnItem(db.Model):
     
     quantity_returned = db.Column(db.Integer, nullable=False)
     reason = db.Column(db.String(300))
+
+class ConsignmentRemittance(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    consignment_id = db.Column(db.Integer, db.ForeignKey('consignment_received.id'), nullable=False)
+    date_paid = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    amount_paid = db.Column(db.Float, nullable=False)
+    payment_method = db.Column(db.String(50))
+    notes = db.Column(db.Text)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    
+    consignment = db.relationship('ConsignmentReceived', back_populates='remittances')
+    created_by = db.relationship('User')
+
+    def __repr__(self):
+        return f'<ConsignmentRemittance {self.id} for {self.consignment_id}>'
