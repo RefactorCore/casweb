@@ -85,6 +85,9 @@
       <a href="{{ url_for('core.pos') }}" class="{% if '/pos' in request.path %}active{% endif %}">
         <i class="bi bi-cart3 me-2"></i> POS
       </a>
+      <a href="{{ url_for('consignment.suppliers') }}" class="{% if '/consignment' in request.path %}active{% endif %}">
+        <i class="bi bi-box2-heart me-2"></i> Consignment
+      </a>
       <a href="{{ url_for('core.inventory') }}" class="{% if '/inventory' in request.path or '/stock-card' in request.path %}active{% endif %}">
         <i class="bi bi-box-seam me-2"></i> Inventory
       </a>

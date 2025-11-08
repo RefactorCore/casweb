@@ -213,11 +213,27 @@
 
       <div id="productGrid" class="product-grid">
         {% for p in products %}
-        <div class="product-card" data-sku="{{ p.sku }}" data-name="{{ p.name }}" data-price="{{ p.sale_price }}" data-stock="{{ p.quantity }}">
+        <div class="product-card" 
+             data-sku="{{ p.sku }}" 
+             data-name="{{ p.name }}" 
+             data-price="{{ p.price }}" 
+             data-stock="{{ p.quantity }}"
+             data-is-consignment="{{ p.is_consignment|lower }}"
+             data-consignment-id="{{ p.consignment_id if p.is_consignment else '' }}"
+             data-item-id="{{ p.id }}">
           <div class="name">{{ p.name }}</div>
           <div class="sku">{{ p.sku }}</div>
+          {% if p.is_consignment %}
+          <div class="mb-1">
+            <span class="badge" style="background: linear-gradient(135deg, #f39c12, #e67e22); color: white; font-size: 0.7rem;">
+              <i class="bi bi-box2-heart"></i> CONSIGNED
+            </span>
+          </div>
+          {% endif %}
           <div class="price-badge">
-            <div class="badge-price">₱{{ "%.2f"|format(p.sale_price) }}</div>
+            <div class="badge-price" style="{% if p.is_consignment %}background: linear-gradient(180deg, #f39c12, #e67e22);{% endif %}">
+              ₱{{ "%.2f"|format(p.price) }}
+            </div>
             <div class="product-quantity">Stock: {{ p.quantity }}</div>
           </div>
         </div>
@@ -506,29 +522,41 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 
   // Product card click: add once with qty=1 if not already in cart
+  // Product card click: add once with qty=1 if not already in cart
   document.querySelectorAll('.product-card').forEach(el => {
     el.addEventListener('click', () => {
-      const sku = el.dataset.sku;
-      const name = el.dataset.name;
-      const price = parseFloat(el.dataset.price);
-      const stock = parseInt(el.dataset.stock || '0', 10);
+        const sku = el.dataset.sku;
+        const name = el.dataset.name;
+        const price = parseFloat(el.dataset.price);
+        const stock = parseInt(el.dataset.stock || '0', 10);
+        const isConsignment = el.dataset.isConsignment === 'true';
+        const consignmentId = el.dataset.consignmentId || '';
+        const itemId = parseInt(el.dataset.itemId);
 
-      const existing = cart.find(i => i.sku === sku);
+        const existing = cart.find(i => i.sku === sku);
 
-      if (existing) {
-        // Product already in cart — do nothing
-        return;
-      }
+        if (existing) {
+            // Product already in cart — do nothing
+            return;
+        }
 
-      if (stock <= 0) {
-        alert(`"${name}" is out of stock.`);
-        return;
-      }
+        if (stock <= 0) {
+            alert(`"${name}" is out of stock.`);
+            return;
+        }
 
-      cart.push({ sku, name, price, qty: 1 });
-      renderCart();
+        cart.push({ 
+            sku, 
+            name, 
+            price, 
+            qty: 1,
+            is_consignment: isConsignment,
+            consignment_id: consignmentId,
+            consignment_item_id: itemId
+        });
+        renderCart();
     });
-  });
+});
 
   // Save quantity in modal
   document.getElementById('saveQtyBtn').addEventListener('click', function() {

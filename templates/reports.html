@@ -64,7 +64,11 @@
                                         </tr>
                                     </thead>
                                     <tbody>
+                                        {% set total_debit = 0 %}
+                                        {% set total_credit = 0 %}
                                         {% for e in j.entries() %}
+                                        {% set total_debit = total_debit + (e.debit or 0) %}
+                                        {% set total_credit = total_credit + (e.credit or 0) %}
                                         <tr>
                                             <td>
                                               {{ accounts_map.get(e.account_code, e.account_code) }}
@@ -74,6 +78,33 @@
                                             <td class="text-end">{{ e.credit | money }}</td>
                                         </tr>
                                         {% endfor %}
+                                        <!-- TOTALS ROW -->
+                                        <tr class="table-light border-top">
+                                            <td><strong>TOTALS</strong></td>
+                                            <td class="text-end"><strong>{{ total_debit | money }}</strong></td>
+                                            <td class="text-end"><strong>{{ total_credit | money }}</strong></td>
+                                        </tr>
+                                        <!-- BALANCED INDICATOR ROW -->
+                                        <tr class="{% if (total_debit - total_credit)|abs < 0.01 %}table-success{% else %}table-danger{% endif %}">
+                                            <td colspan="2">
+                                                <strong>
+                                                    {% if (total_debit - total_credit)|abs < 0.01 %}
+                                                        ✅ Balanced
+                                                    {% else %}
+                                                        ❌ NOT Balanced (Difference: {{ (total_debit - total_credit) | money }})
+                                                    {% endif %}
+                                                </strong>
+                                            </td>
+                                            <td class="text-end">
+                                                <strong>
+                                                    {% if (total_debit - total_credit)|abs < 0.01 %}
+                                                        <span class="badge bg-success">DR = CR</span>
+                                                    {% else %}
+                                                        <span class="badge bg-danger">DR ≠ CR</span>
+                                                    {% endif %}
+                                                </strong>
+                                            </td>
+                                        </tr>
                                     </tbody>
                                 </table>
                             </div>
