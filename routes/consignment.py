@@ -1,9 +1,11 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, session
 from flask_login import login_required, current_user
-from models import db, ConsignmentSupplier, ConsignmentReceived, ConsignmentItem
+from models import db, ConsignmentSupplier, ConsignmentReceived, ConsignmentItem, ConsignmentRemittance, CompanyProfile
 from routes.decorators import role_required
 from routes.utils import paginate_query, log_action
 from datetime import datetime, timedelta
+from sqlalchemy import func
+
 
 consignment_bp = Blueprint('consignment', __name__, url_prefix='/consignment')
 
@@ -11,6 +13,16 @@ consignment_bp = Blueprint('consignment', __name__, url_prefix='/consignment')
 # CONSIGNMENT SUPPLIERS
 # ============================================
 
+def get_company_profile():
+    """Helper to get company profile for templates"""
+    return CompanyProfile.query.first()
+
+# Make it available in all consignment templates
+@consignment_bp.context_processor
+def inject_company():
+    return dict(get_company_profile=get_company_profile, datetime=datetime)
+
+    
 @consignment_bp.route('/suppliers')
 @login_required
 @role_required('Admin', 'Accountant')
@@ -271,8 +283,262 @@ def view_consignment(consignment_id):
     consignment = ConsignmentReceived.query.get_or_404(consignment_id)
     items = ConsignmentItem.query.filter_by(consignment_id=consignment_id).all()
     
+    # --- ADD THIS CALCULATION ---
+    # Calculate total paid from all remittances for this consignment
+    total_paid = db.session.query(func.sum(ConsignmentRemittance.amount_paid))\
+        .filter(ConsignmentRemittance.consignment_id == consignment.id)\
+        .scalar() or 0.0
+    
     return render_template(
         'consignment/view.html',
         consignment=consignment,
-        items=items
+        items=items,
+        total_paid=total_paid  # <-- Pass the calculated value here
+    )
+
+
+@consignment_bp.route('/item/<int:item_id>/adjust', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def adjust_item(item_id):
+    """Mark items as damaged (cannot be sold or returned)"""
+    item = ConsignmentItem.query.get_or_404(item_id)
+    
+    try:
+        qty_damaged = int(request.form.get('quantity_damaged', 0))
+        damage_reason = request.form.get('damage_reason', '').strip()
+        
+        # Validate quantity
+        if qty_damaged < 0:
+            flash('Damaged quantity cannot be negative.', 'danger')
+            return redirect(url_for('consignment.view_consignment', consignment_id=item.consignment_id))
+        
+        # Validate total doesn't exceed available
+        max_can_damage = item.quantity_received - item.quantity_sold - item.quantity_returned
+        if qty_damaged > max_can_damage:
+            flash(
+                f'Error: Cannot mark {qty_damaged} as damaged. '
+                f'Maximum available to damage: {max_can_damage} '
+                f'(Received: {item.quantity_received}, Sold: {item.quantity_sold}, Already Returned: {item.quantity_returned})',
+                'danger'
+            )
+            return redirect(url_for('consignment.view_consignment', consignment_id=item.consignment_id))
+            
+        # Update damaged quantity
+        item.quantity_damaged = qty_damaged
+        
+        db.session.commit()
+        
+        reason_text = f" - Reason: {damage_reason}" if damage_reason else ""
+        log_action(
+            f'Marked {qty_damaged} units of {item.product_name} as damaged on consignment {item.consignment.receipt_number}{reason_text}'
+        )
+        flash(
+            f'✅ Marked {qty_damaged} units of "{item.product_name}" as damaged. '
+            f'Available for sale/return: {item.quantity_available}',
+            'success'
+        )
+        
+    except ValueError as e:
+        db.session.rollback()
+        flash(f'Invalid input: {str(e)}', 'danger')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error updating item: {str(e)}', 'danger')
+    
+    return redirect(url_for('consignment.view_consignment', consignment_id=item.consignment_id))
+
+
+# ADD THIS NEW ROUTE for processing payment remittance
+@consignment_bp.route('/consignment/<int:consignment_id>/remit', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def remit_payment(consignment_id):
+    """Complete settlement: Return unsold items and remit payment to supplier"""
+    consignment = ConsignmentReceived.query.get_or_404(consignment_id)
+    
+    try:
+        amount_paid = float(request.form.get('amount_paid'))
+        payment_method = request.form.get('payment_method', 'Cash')
+        reference_number = request.form.get('reference_number', '').strip()
+        notes = request.form.get('notes', '').strip()
+        
+        # Validate payment amount
+        if amount_paid <= 0:
+            flash('Payment amount must be greater than zero.', 'danger')
+            return redirect(url_for('consignment.view_consignment', consignment_id=consignment_id))
+        
+        # Calculate totals
+        total_already_paid = db.session.query(func.sum(ConsignmentRemittance.amount_paid))\
+            .filter(ConsignmentRemittance.consignment_id == consignment.id)\
+            .scalar() or 0.0
+        
+        amount_due = consignment.get_amount_due_to_supplier()
+        remaining_due = amount_due - total_already_paid
+        
+        # Warn if overpayment
+        if amount_paid > remaining_due + 0.01:
+            flash(
+                f'⚠️ Warning: Payment amount (₱{amount_paid:,.2f}) exceeds remaining due (₱{remaining_due:,.2f}).',
+                'warning'
+            )
+        
+        # ✅ FIX: Calculate returns BEFORE modifying quantities
+        total_returned = 0
+        items_being_returned = []  # Track for receipt
+        
+        for item in consignment.items:
+            # ✅ CRITICAL: Calculate available BEFORE changing quantity_returned
+            qty_available = item.quantity_received - item.quantity_sold - item.quantity_returned - item.quantity_damaged
+            
+            if qty_available > 0:
+                # Store details for receipt
+                items_being_returned.append({
+                    'sku': item.sku,
+                    'name': item.product_name,
+                    'quantity': qty_available,
+                    'retail_price': item.retail_price,
+                    'total_value': qty_available * item.retail_price
+                })
+                
+                # Now update the quantity
+                item.quantity_returned += qty_available  # ✅ Use += to add to existing
+                total_returned += qty_available
+                
+                log_action(
+                    f'Auto-returned {qty_available} units of {item.product_name} '
+                    f'on settlement of {consignment.receipt_number}'
+                )
+        
+        # Create remittance record with detailed info
+        settlement_notes = f"Returned {total_returned} unsold items. "
+        if reference_number:
+            settlement_notes = f"Ref: {reference_number}. " + settlement_notes
+        if notes:
+            settlement_notes += notes
+        
+        remittance = ConsignmentRemittance(
+            consignment_id=consignment.id,
+            amount_paid=amount_paid,
+            payment_method=payment_method,
+            notes=settlement_notes,
+            created_by_id=current_user.id
+        )
+        db.session.add(remittance)
+        db.session.flush()  # Get remittance ID
+        
+        # Update consignment status
+        new_total_paid = total_already_paid + amount_paid
+        if new_total_paid >= amount_due - 0.01:
+            consignment.status = 'Closed'
+            status_msg = '✅ Consignment fully settled and closed!'
+        else:
+            consignment.status = 'Partial'
+            status_msg = f'✅ Partial payment recorded. Remaining: ₱{(amount_due - new_total_paid):,.2f}'
+        
+        # Create journal entry
+        from models import JournalEntry
+        from routes.utils import get_system_account_code
+        import json
+        
+        je_lines = [
+            {
+                'account_code': get_system_account_code('Consignment Payable'),
+                'debit': float(amount_paid),
+                'credit': 0
+            },
+            {
+                'account_code': get_system_account_code('Cash'),
+                'debit': 0,
+                'credit': float(amount_paid)
+            }
+        ]
+        
+        journal_entry = JournalEntry(
+            description=f'Settlement for {consignment.receipt_number}: Paid {consignment.supplier.name} ₱{amount_paid:,.2f}, Returned {total_returned} items',
+            entries_json=json.dumps(je_lines)
+        )
+        db.session.add(journal_entry)
+        
+        db.session.commit()
+        
+        log_action(
+            f'Completed settlement for {consignment.receipt_number}: '
+            f'Paid ₱{amount_paid:,.2f}, Returned {total_returned} items. '
+            f'Total paid: ₱{new_total_paid:,.2f} / ₱{amount_due:,.2f}'
+        )
+        
+        flash(status_msg, 'success')
+        flash(f'📦 Returned {total_returned} unsold items to supplier.', 'info')
+        
+        # ✅ NEW: Store settlement details in session for receipt
+        from flask import session
+        session['last_settlement'] = {
+            'remittance_id': remittance.id,
+            'consignment_id': consignment.id,
+            'receipt_number': consignment.receipt_number,
+            'supplier_name': consignment.supplier.name,
+            'date': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            'items_returned': items_being_returned,
+            'total_returned': total_returned,
+            'amount_paid': amount_paid,
+            'payment_method': payment_method,
+            'reference_number': reference_number
+        }
+        
+        # Redirect to settlement receipt
+        return redirect(url_for('consignment.settlement_receipt', remittance_id=remittance.id))
+
+    except ValueError as e:
+        db.session.rollback()
+        flash(f'Invalid payment amount: {str(e)}', 'danger')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error processing settlement: {str(e)}', 'danger')
+    
+    return redirect(url_for('consignment.view_consignment', consignment_id=consignment_id))
+
+
+@consignment_bp.route('/settlement-receipt/<int:remittance_id>')
+@login_required
+@role_required('Admin', 'Accountant', 'Cashier')
+def settlement_receipt(remittance_id):
+    """Display settlement receipt showing returned items and payment"""
+    remittance = ConsignmentRemittance.query.get_or_404(remittance_id)
+    consignment = remittance.consignment
+    
+    # Get all items with their final quantities
+    items = ConsignmentItem.query.filter_by(consignment_id=consignment.id).all()
+    
+    # Calculate totals
+    total_received = sum(item.quantity_received for item in items)
+    total_sold = sum(item.quantity_sold for item in items)
+    total_returned = sum(item.quantity_returned for item in items)
+    total_damaged = sum(item.quantity_damaged for item in items)
+    
+    # Get all remittances for this consignment
+    all_remittances = ConsignmentRemittance.query.filter_by(consignment_id=consignment.id)\
+        .order_by(ConsignmentRemittance.date_paid).all()
+    
+    total_paid = sum(r.amount_paid for r in all_remittances)
+    
+    # Calculate financial summary
+    total_sold_value = consignment.get_total_sold_value()
+    commission_earned = consignment.get_commission_earned()
+    amount_due_total = consignment.get_amount_due_to_supplier()
+    
+    return render_template(
+        'consignment/settlement_receipt.html',
+        remittance=remittance,
+        consignment=consignment,
+        items=items,
+        total_received=total_received,
+        total_sold=total_sold,
+        total_returned=total_returned,
+        total_damaged=total_damaged,
+        total_paid=total_paid,
+        total_sold_value=total_sold_value,
+        commission_earned=commission_earned,
+        amount_due_total=amount_due_total,
+        all_remittances=all_remittances
     )
