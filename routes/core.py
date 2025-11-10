@@ -357,7 +357,6 @@ def toggle_product_status(product_id):
 @role_required('Admin', 'Accountant')
 def inventory_bulk_add():
     if request.method == 'POST':
-        # Import FIFO utilities
         from routes.fifo_utils import create_inventory_lot
         
         if 'csv_file' not in request.files:
@@ -377,7 +376,7 @@ def inventory_bulk_add():
             stream = io.StringIO(file.stream.read().decode("UTF-8"), newline=None)
             csv_reader = csv.reader(stream)
             
-            next(csv_reader, None)
+            next(csv_reader, None)  # Skip header
             
             products_added = 0
             total_value = 0.0
@@ -390,8 +389,17 @@ def inventory_bulk_add():
                 flash(f'An error occurred finding system accounts: {str(e)}', 'danger')
                 return redirect(request.url)
             
-            for row in csv_reader:
-                if not row or len(row) < 5:
+            # ✅ ADDED: Track what we're adding for debugging
+            debug_items = []
+            
+            for row_num, row in enumerate(csv_reader, start=2):  # Start at 2 (after header)
+                # ✅ FIXED: Skip completely empty rows silently
+                if not row or all(cell.strip() == '' for cell in row):
+                    continue  # Don't log empty rows as errors
+                
+                # ✅ FIXED: Validate we have enough columns
+                if len(row) < 5:
+                    errors.append(f"Row {row_num}: Not enough columns (expected 5, got {len(row)})")
                     continue
 
                 try:
@@ -401,15 +409,18 @@ def inventory_bulk_add():
                     cost_price = float(row[3] or 0.0)
                     quantity = int(row[4] or 0)
                     
+                    # ✅ FIXED: Better validation
                     if not sku or not name:
-                        errors.append(f"Skipped row (missing SKU or Name): {','.join(row)}")
+                        errors.append(f"Row {row_num}: Missing SKU or Name")
                         continue
 
+                    # ✅ ADDED: Check for duplicates in DB
                     existing_sku = Product.query.filter_by(sku=sku).first()
                     if existing_sku:
-                        errors.append(f"SKU '{sku}' already exists. Skipped.")
+                        errors.append(f"Row {row_num}: SKU '{sku}' already exists. Skipped.")
                         continue
 
+                    # Create product
                     new_prod = Product(
                         sku=sku,
                         name=name,
@@ -418,13 +429,24 @@ def inventory_bulk_add():
                         quantity=quantity
                     )
                     db.session.add(new_prod)
-                    db.session.flush()  # ✅ Need the product ID
+                    db.session.flush()
 
+                    # ✅ ADDED: Only create opening balance if qty and cost > 0
                     if quantity > 0 and cost_price > 0:
                         initial_value = round(quantity * cost_price, 2)
+                        
+                        # ✅ ADDED: Debug tracking
+                        debug_items.append({
+                            'sku': sku,
+                            'name': name,
+                            'qty': quantity,
+                            'cost': cost_price,
+                            'value': initial_value
+                        })
+                        
                         total_value += initial_value
                         
-                        # ✅ NEW: Create inventory lot for opening balance
+                        # Create inventory lot
                         create_inventory_lot(
                             product_id=new_prod.id,
                             quantity=quantity,
@@ -432,6 +454,7 @@ def inventory_bulk_add():
                             is_opening_balance=True
                         )
                         
+                        # Create journal entry
                         je_lines = [
                             {'account_code': inventory_code, 'debit': initial_value, 'credit': 0},
                             {'account_code': equity_code, 'debit': 0, 'credit': initial_value}
@@ -445,22 +468,33 @@ def inventory_bulk_add():
                     db.session.commit()
                     products_added += 1
 
-                except ValueError:
+                except ValueError as e:
                     db.session.rollback()
-                    errors.append(f"Invalid number format for row: {','.join(row)}. Skipped.")
+                    errors.append(f"Row {row_num}: Invalid number format - {str(e)}")
                 except Exception as e:
                     db.session.rollback()
-                    errors.append(f"Error on row {','.join(row)}: {str(e)}. Skipped.")
+                    errors.append(f"Row {row_num}: {str(e)}")
             
+            # ✅ ADDED: Show detailed breakdown
             flash(f'Successfully added {products_added} products.', 'success')
             if total_value > 0:
                 flash(f'Recorded ₱{total_value:,.2f} in Beginning Inventory Value.', 'info')
-            if errors:
-                flash('Some rows were not imported:', 'warning')
-                for error in errors:
-                    flash(error, 'danger')
+                
+                # ✅ ADDED: Debug output (remove this after testing)
+                print("\n=== DEBUG: Inventory Upload Breakdown ===")
+                for item in debug_items:
+                    print(f"{item['sku']}: {item['qty']} × ₱{item['cost']} = ₱{item['value']}")
+                print(f"TOTAL: ₱{total_value}")
+                print("=" * 40)
             
-            log_action(f'Bulk-added {products_added} products with total beginning value of {total_value}.')
+            if errors:
+                flash(f'{len(errors)} rows had issues:', 'warning')
+                for error in errors[:5]:  # Show first 5 errors only
+                    flash(error, 'danger')
+                if len(errors) > 5:
+                    flash(f'... and {len(errors) - 5} more errors', 'danger')
+            
+            log_action(f'Bulk-added {products_added} products with total beginning value of ₱{total_value:,.2f}.')
             return redirect(url_for('core.inventory'))
 
         except Exception as e:
@@ -1892,6 +1926,48 @@ def adjust_stock():
         flash(f'Error adjusting stock: {str(e)}', 'danger')
         
     return redirect(url_for('core.inventory'))
+
+
+@core_bp.route('/stock-adjustments')
+@login_required
+@role_required('Admin', 'Accountant')
+def stock_adjustments():
+    """List all stock adjustments with search and filters"""
+    search = request.args.get('search', '').strip()
+    status = request.args.get('status', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    
+    query = StockAdjustment.query
+    
+    # Apply search filter
+    if search:
+        query = query.join(Product).filter(
+            (Product.name.ilike(f'%{search}%')) |
+            (StockAdjustment.reason.ilike(f'%{search}%'))
+        )
+    
+    # Apply status filter
+    if status == 'active':
+        query = query.filter(StockAdjustment.voided_at.is_(None))
+    elif status == 'voided':
+        query = query.filter(StockAdjustment.voided_at.isnot(None))
+    
+    # Apply date filter
+    if date_from:
+        try:
+            date_obj = datetime.strptime(date_from, '%Y-%m-%d')
+            query = query.filter(StockAdjustment.created_at >= date_obj)
+        except ValueError:
+            pass
+    
+    adjustments = query.order_by(StockAdjustment.created_at.desc()).all()
+    
+    # Get all active products for the adjustment modal
+    all_active_products = Product.query.filter_by(is_active=True).order_by(Product.name).all()
+    
+    return render_template('stock_adjustments.html', 
+                         adjustments=adjustments,
+                         all_active_products=all_active_products)
 
 
 # Add this new route for viewing the logs

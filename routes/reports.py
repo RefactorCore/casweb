@@ -575,75 +575,103 @@ def ap_aging():
 @role_required('Admin', 'Accountant')
 def stock_card(product_id):
     """Generates an inventory stock card for a specific product."""
-    from models import ARInvoiceItem  # ✅ ADD THIS IMPORT
+    from models import ARInvoiceItem
     
     product = Product.query.get_or_404(product_id)
     
-    sales = SaleItem.query.filter_by(product_id=product.id).all()
+    # ✅ UPDATED: Include voided sales
+    sales = SaleItem.query.join(Sale).filter(SaleItem.product_id == product.id).all()
+    
     purchases = PurchaseItem.query.filter_by(product_id=product.id).all()
     adjustments = StockAdjustment.query.filter_by(product_id=product.id).all()
     
-    # ✅ ADD THIS: Query AR Invoice Items (Billing Invoices)
-    ar_invoice_items = ARInvoiceItem.query.filter_by(product_id=product.id).all()
+    # ✅ UPDATED: Include voided AR invoices
+    ar_invoice_items = ARInvoiceItem.query.join(ARInvoice).filter(
+        ARInvoiceItem.product_id == product.id
+    ).all()
     
     # Combine and sort transactions by date
     transactions = []
     
-    # Regular POS/Cash Sales
+    # ✅ UPDATED: Regular POS/Cash Sales (show voided status)
     for s in sales:
+        is_voided = s.sale.voided_at is not None
         transactions.append({
             'date': s.sale.created_at,
-            'type': 'Sale (POS)',
+            'type': '[VOID] Sale (POS)' if is_voided else 'Sale (POS)',
             'ref_id': s.sale_id,
-            'qty_in': 0,
-            'qty_out': s.qty,
-            'cost': product.cost_price
+            'qty_in': s.qty if is_voided else 0,  # ✅ Show as "Qty In" if voided
+            'qty_out': 0 if is_voided else s.qty,  # ✅ Show as "Qty Out" if not voided
+            'cost': product.cost_price,
+            'voided': is_voided,
+            'void_reason': s.sale.void_reason if is_voided else None
         })
     
-    # Purchases
+    # ✅ UPDATED: Purchases (show voided status)
     for p in purchases:
-         transactions.append({
+        is_voided = p.purchase.voided_at is not None
+        transactions.append({
             'date': p.purchase.created_at,
-            'type': 'Purchase',
+            'type': '[VOID] Purchase' if is_voided else 'Purchase',
             'ref_id': p.purchase_id,
-            'qty_in': p.qty,
-            'qty_out': 0,
-            'cost': p.unit_cost
+            'qty_in': 0 if is_voided else p.qty,
+            'qty_out': p.qty if is_voided else 0,  # ✅ Show as "Qty Out" if voided
+            'cost': p.unit_cost,
+            'voided': is_voided,
+            'void_reason': p.purchase.void_reason if is_voided else None
         })
 
-    # Stock Adjustments
+    # ✅ UPDATED: Stock Adjustments (show voided status)
     for adj in adjustments:
-         transactions.append({
+        is_voided = adj.voided_at is not None
+        
+        if is_voided:
+            # Reverse the adjustment direction when voided
+            qty_in = abs(adj.quantity_changed) if adj.quantity_changed < 0 else 0
+            qty_out = adj.quantity_changed if adj.quantity_changed > 0 else 0
+            transaction_type = f'[VOID] Adjustment ({adj.reason})'
+        else:
+            qty_in = adj.quantity_changed if adj.quantity_changed > 0 else 0
+            qty_out = abs(adj.quantity_changed) if adj.quantity_changed < 0 else 0
+            transaction_type = f'Adjustment ({adj.reason})'
+        
+        transactions.append({
             'date': adj.created_at,
-            'type': f'Adjustment ({adj.reason})',
+            'type': transaction_type,
             'ref_id': adj.id,
-            'qty_in': adj.quantity_changed if adj.quantity_changed > 0 else 0,
-            'qty_out': abs(adj.quantity_changed) if adj.quantity_changed < 0 else 0,
-            'cost': product.cost_price 
+            'qty_in': qty_in,
+            'qty_out': qty_out,
+            'cost': product.cost_price,
+            'voided': is_voided,
+            'void_reason': adj.void_reason if is_voided else None
         })
     
-    # ✅ ADD THIS: Billing Invoice Items (Credit Sales)
+    # ✅ UPDATED: Billing Invoice Items (show voided status)
     for ar_item in ar_invoice_items:
+        is_voided = ar_item.ar_invoice.voided_at is not None
+        invoice_num = ar_item.ar_invoice.invoice_number or f"AR-{ar_item.ar_invoice.id}"
+        
         transactions.append({
             'date': ar_item.ar_invoice.date,
-            'type': f'Billing Invoice (Utang) - {ar_item.ar_invoice.invoice_number}',
+            'type': f'[VOID] Billing Invoice - {invoice_num}' if is_voided else f'Billing Invoice - {invoice_num}',
             'ref_id': ar_item.ar_invoice_id,
-            'qty_in': 0,
-            'qty_out': ar_item.qty,
-            'cost': ar_item.cogs / ar_item.qty if ar_item.qty > 0 else product.cost_price  # Calculate unit cost
+            'qty_in': ar_item.qty if is_voided else 0,  # ✅ Restored if voided
+            'qty_out': 0 if is_voided else ar_item.qty,
+            'cost': ar_item.cogs / ar_item.qty if ar_item.qty > 0 else product.cost_price,
+            'voided': is_voided,
+            'void_reason': ar_item.ar_invoice.void_reason if is_voided else None
         })
         
     transactions.sort(key=lambda x: x['date'])
     
-    # Calculate the opening balance by working backward from the current quantity
+    # ✅ UPDATED: Calculate opening balance considering voided transactions
     current_quantity = product.quantity
     
-    total_sales_qty = sum(s.qty for s in sales)
-    total_purchase_qty = sum(p.qty for p in purchases)
-    total_adjustment_qty = sum(adj.quantity_changed for adj in adjustments)
-    total_ar_invoice_qty = sum(ar.qty for ar in ar_invoice_items)  # ✅ ADD THIS
+    total_sales_qty = sum(s.qty for s in sales if not s.sale.voided_at)
+    total_purchase_qty = sum(p.qty for p in purchases if not p.purchase.voided_at)
+    total_adjustment_qty = sum(adj.quantity_changed for adj in adjustments if not adj.voided_at)
+    total_ar_invoice_qty = sum(ar.qty for ar in ar_invoice_items if not ar.ar_invoice.voided_at)
     
-    # ✅ UPDATE THIS: Include AR invoice items in calculation
     # Opening Balance = Current Qty - (all INs) + (all OUTs)
     opening_balance = current_quantity - total_purchase_qty - total_adjustment_qty + total_sales_qty + total_ar_invoice_qty
     
@@ -662,7 +690,9 @@ def stock_card(product_id):
         'qty_in': opening_balance if opening_balance > 0 else 0,
         'qty_out': abs(opening_balance) if opening_balance < 0 else 0,
         'cost': product.cost_price,
-        'balance': running_balance
+        'balance': running_balance,
+        'voided': False,
+        'void_reason': None
     })
     
     # Now, calculate the running balance for all other transactions
@@ -986,37 +1016,39 @@ def aggregate_account_balances(start_date=None, end_date=None):
 @login_required
 @role_required('Admin', 'Accountant')
 def general_ledger():
-    # --- NEW: Get dates from URL ---
+    # Get dates from URL
     start_date_str = request.args.get('start_date', '')
     end_date_str = request.args.get('end_date', '')
 
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str)
     
-    # --- MODIFIED: Pass dates to the aggregator ---
-    # The aggregator is designed to work with dates now.
+    # Get aggregated balances
     agg = aggregate_account_balances(start_date, end_date)
     
     gl_data = []
     
-    # This logic remains the same (using Trial Balance rules to show the net effect)
+    # ✅ FIXED LOGIC
     for acc_code, balance in agg.items():
         acc_details = Account.query.filter_by(code=acc_code).first()
         if not acc_details:
             continue
 
-        is_debit_account = acc_details.type in ['Asset', 'Expense']
+        # Determine account normal balance
+        is_debit_normal = acc_details.type in ['Asset', 'Expense']
         
-        if is_debit_account:
-            # Positive balance is net Debit, Negative balance is net Credit
+        if is_debit_normal:
+            # Asset/Expense accounts: Normal balance is DEBIT
+            # Positive balance = Debit, Negative balance = Credit
             final_debit = balance if balance >= 0 else 0.0
             final_credit = abs(balance) if balance < 0 else 0.0
-            balance_type = 'Debit'
+            balance_type = 'Debit' if balance >= 0 else 'Credit'
         else:
-            # Negative balance is net Credit, Positive balance is net Debit
-            final_debit = abs(balance) if balance > 0 else 0.0
-            final_credit = abs(balance) if balance <= 0 else 0.0
-            balance_type = 'Credit'
+            # Liability/Equity/Revenue accounts: Normal balance is CREDIT
+            # Negative balance = Credit, Positive balance = Debit (unusual)
+            final_debit = balance if balance > 0 else 0.0
+            final_credit = abs(balance) if balance < 0 else 0.0  # ✅ FIXED
+            balance_type = 'Credit' if balance < 0 else 'Debit'
 
         gl_data.append({
             'account': f"{acc_code} - {acc_details.name}",
@@ -1026,9 +1058,8 @@ def general_ledger():
             'balance_type': balance_type
         })
         
-    gl_data.sort(key=lambda x: x['account']) # Sort by account name/code
+    gl_data.sort(key=lambda x: x['account'])
     
-    # --- MODIFIED: Pass dates to the template ---
     return render_template('general_ledger.html', 
                            gl_data=gl_data,
                            start_date=start_date_str, 
@@ -1041,33 +1072,31 @@ def general_ledger():
 def export_general_ledger():
     """Exports the General Ledger Summary to CSV."""
     
-    # --- NEW: Get dates from URL ---
     start_date_str = request.args.get('start_date', '')
     end_date_str = request.args.get('end_date', '')
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str)
 
-    # --- MODIFIED: Pass dates to the aggregator ---
     agg = aggregate_account_balances(start_date, end_date)
     
     gl_data = []
     
-    # This logic remains the same
+    # ✅ SAME FIXED LOGIC AS ABOVE
     for acc_code, balance in agg.items():
         acc_details = Account.query.filter_by(code=acc_code).first()
         if not acc_details:
             continue
 
-        is_debit_account = acc_details.type in ['Asset', 'Expense']
+        is_debit_normal = acc_details.type in ['Asset', 'Expense']
         
-        if is_debit_account:
+        if is_debit_normal:
             final_debit = balance if balance >= 0 else 0.0
             final_credit = abs(balance) if balance < 0 else 0.0 
-            balance_type = 'Debit'
+            balance_type = 'Debit' if balance >= 0 else 'Credit'
         else:
-            final_debit = abs(balance) if balance > 0 else 0.0
-            final_credit = abs(balance) if balance <= 0 else 0.0
-            balance_type = 'Credit'
+            final_debit = balance if balance > 0 else 0.0
+            final_credit = abs(balance) if balance < 0 else 0.0  # ✅ FIXED
+            balance_type = 'Credit' if balance < 0 else 'Debit'
 
         gl_data.append({
             'account': f"{acc_code} - {acc_details.name}",
@@ -1082,15 +1111,13 @@ def export_general_ledger():
     output = io.StringIO()
     writer = csv.writer(output)
     
-    # --- NEW: Add date range to the CSV header ---
     date_range_label = f"For the period {start_date_str} to {end_date_str}"
     if not start_date_str or not end_date_str:
-        date_range_label = "For All Time (Current Balances)" # Fallback label
+        date_range_label = "For All Time (Current Balances)"
         
     writer.writerow(["General Ledger Summary", ""])
     writer.writerow([date_range_label, ""])
     writer.writerow([])
-    # --- END NEW ---
     
     writer.writerow(["Account", "Net Debits (₱)", "Net Credits (₱)", "Balance (₱)", "Balance Type"])
     total_debits = 0.0
@@ -1111,7 +1138,6 @@ def export_general_ledger():
     writer.writerow(["TOTALS (Net Balances)", f"{total_debits:.2f}", f"{total_credits:.2f}", "", ""])
 
     output.seek(0)
-    # --- NEW: Include date range in the filename for better file management ---
     date_suffix = f"{start_date_str.replace('-', '')}_{end_date_str.replace('-', '')}" if start_date_str and end_date_str else datetime.now().strftime('%Y%m%d')
     filename = f"general_ledger_summary_{date_suffix}.csv"
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})

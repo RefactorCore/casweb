@@ -5,7 +5,7 @@ import io, csv
 import json
 from .decorators import role_required
 from .utils import log_action, get_system_account_code
-from models import Product, ARInvoiceItem
+from models import Product, ARInvoiceItem, Payment
 from datetime import datetime, timedelta
 
 ar_ap_bp = Blueprint('ar_ap', __name__, url_prefix='')
@@ -551,7 +551,8 @@ def billing_invoices():
     return render_template('billing_invoices.html', 
                          invoices=invoices, 
                          customers=customers,
-                         products=products_list)
+                         products=products_list,
+                         Payment=Payment)  # ✅ Pass Payment model
 
 
 @ar_ap_bp.route('/export/ar.csv')

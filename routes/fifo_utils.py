@@ -244,3 +244,48 @@ def reconcile_inventory_lots(product_id):
         'discrepancy': discrepancy,
         'is_balanced': discrepancy == 0
     }
+
+
+
+def reverse_inventory_consumption(sale_id=None, ar_invoice_id=None):
+    """
+    Reverse FIFO inventory consumption for voided transactions.
+    Restores inventory lots and deletes the consumption records.
+    
+    Args:
+        sale_id: ID of the voided sale
+        ar_invoice_id: ID of the voided AR invoice
+    
+    Returns:
+        dict: Summary of reversed quantities by product
+    """
+    # Find all inventory transactions for this sale/invoice
+    query = InventoryTransaction.query
+    
+    if sale_id:
+        query = query.filter(InventoryTransaction.sale_id == sale_id)
+    elif ar_invoice_id:
+        query = query.filter(InventoryTransaction.ar_invoice_id == ar_invoice_id)
+    else:
+        raise ValueError("Must provide either sale_id or ar_invoice_id")
+    
+    transactions = query.all()
+    
+    reversed_summary = {}
+    
+    for trans in transactions:
+        # Restore the lot quantity
+        lot = InventoryLot.query.get(trans.lot_id)
+        if lot:
+            lot.quantity_remaining += trans.quantity_used
+            
+            # Track what we reversed
+            product_id = lot.product_id
+            if product_id not in reversed_summary:
+                reversed_summary[product_id] = 0
+            reversed_summary[product_id] += trans.quantity_used
+        
+        # Delete the transaction record
+        db.session.delete(trans)
+    
+    return reversed_summary
