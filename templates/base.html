@@ -91,6 +91,9 @@
       <a href="{{ url_for('core.inventory') }}" class="{% if '/inventory' in request.path or '/stock-card' in request.path %}active{% endif %}">
         <i class="bi bi-box-seam me-2"></i> Inventory
       </a>
+      <a href="{{ url_for('core.stock_adjustments') }}" class="{% if '/inventory' in request.path or '/stock-card' in request.path %}active{% endif %}">
+        <i class="bi bi-arrow-down-up"></i> Stock Adjustments
+      </a>
       <a href="{{ url_for('core.purchase') }}" class="{% if '/purchase' == request.path %}active{% endif %}">
         <i class="bi bi-bag-plus me-2"></i> New Purchase
       </a>
@@ -171,9 +174,9 @@
             - Billing Invoices (Credit)
         </a>
 
-          <a href="{{ url_for('ar_ap.ar_invoices') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.ar_invoices' %}active{% endif %}">
+<!--           <a href="{{ url_for('ar_ap.ar_invoices') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.ar_invoices' %}active{% endif %}">
             - AR Invoices
-          </a>
+          </a> -->
           <a href="{{ url_for('ar_ap.ap_invoices') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.ap_invoices' %}active{% endif %}">
             - AP Invoices
           </a>

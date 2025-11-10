@@ -38,45 +38,46 @@
             <th>Total (₱)</th>
             <th>VAT (₱)</th>
             <th>Date</th>
+            <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for p in purchases %}
-            <tr>
+            <tr class="{{ 'table-secondary text-decoration-line-through' if p.voided_at else '' }}">
               <td><strong>#{{ p.id }}</strong></td>
               <td>{{ p.supplier }}</td>
               <td>₱{{ "%.2f"|format(p.total) }}</td>
               <td>₱{{ "%.2f"|format(p.vat) }}</td>
               <td>{{ p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else '—' }}</td>
               <td>
-                {% if p.status != 'Canceled' %}
-                <form id="cancel-form-{{ p.id }}" 
-                      action="{{ url_for('core.cancel_purchase', purchase_id=p.id) }}" 
-                      method="POST" 
-                      style="display: none;">
-                </form>
+                {% if p.voided_at %}
+                  <span class="badge bg-dark">VOIDED</span>
+                {% elif p.status == 'Canceled' %}
+                  <span class="badge bg-secondary">Canceled</span>
+                {% else %}
+                  <span class="badge bg-success">{{ p.status }}</span>
                 {% endif %}
-
+              </td>
+              <td>
                 <div class="btn-group btn-group-sm">
                   <a href="{{ url_for('core.view_purchase', purchase_id=p.id) }}" 
                      class="btn btn-outline-info">🔍 View</a>
                      
-                  {% if p.status != 'Canceled' %}
-                    <button type"submit" 
-                            class="btn btn-warning" 
-                            form="cancel-form-{{ p.id }}"
-                            onclick="return confirm('Are you sure you want to cancel this purchase? This will create a reversing journal entry and cannot be undone.');">
-                      <i class="bi bi-x-circle"></i> Cancel
+                  {% if not p.voided_at and p.status != 'Canceled' %}
+                    <button type="button" 
+                            class="btn btn-outline-danger" 
+                            data-bs-toggle="modal"
+                            data-bs-target="#voidModal"
+                            onclick="setVoidTarget('{{ url_for('void.void_purchase', purchase_id=p.id) }}', 'Purchase #{{ p.id }}')">
+                      <i class="bi bi-x-circle"></i> Void
                     </button>
-                  {% else %}
-                    <span class="badge bg-secondary">Canceled</span>
                   {% endif %}
                 </div>
               </td>
             </tr>
           {% else %}
-            <tr><td colspan="6" class="text-center text-muted py-3">No purchases recorded yet.</td></tr>
+            <tr><td colspan="7" class="text-center text-muted py-3">No purchases recorded yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -97,8 +98,45 @@
   {% endif %}
 </div>
 
+<!-- Void Confirmation Modal -->
+<div class="modal fade" id="voidModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="voidForm" method="POST">
+        <div class="modal-header bg-danger text-white">
+          <h5 class="modal-title">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>Void Purchase
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-warning">
+            <strong>Warning:</strong> This will remove inventory lots and reverse all accounting entries.
+          </div>
+          <p>You are about to void: <strong id="voidTargetName"></strong></p>
+          <div class="mb-3">
+            <label class="form-label"><strong>Void Reason *</strong></label>
+            <textarea name="void_reason" class="form-control" rows="3" placeholder="Enter the reason for voiding this purchase..." required></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-danger">
+            <i class="bi bi-x-circle me-1"></i> Void Purchase
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <!-- Scripts -->
 <script>
+  function setVoidTarget(actionUrl, targetName) {
+    document.getElementById('voidForm').action = actionUrl;
+    document.getElementById('voidTargetName').textContent = targetName;
+  }
+
   // 🔍 Search filter
   document.getElementById("searchInput").addEventListener("keyup", function() {
     let filter = this.value.toLowerCase();
@@ -128,7 +166,5 @@
     const tbody = document.querySelector("#purchaseTable tbody");
     rows.forEach(r => tbody.appendChild(r));
   });
-
-
 </script>
 {% endblock %}

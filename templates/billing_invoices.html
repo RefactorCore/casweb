@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
+
 <div class="container-fluid my-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h2><i class="bi bi-receipt me-2"></i>Billing Invoices (Credit Sales / Utang)</h2>
@@ -31,7 +32,8 @@
                     {% for inv in invoices %}
                     {% set balance = inv.total - inv.paid %}
                     {% set days_overdue = inv.days_overdue() if inv.due_date else 0 %}
-                    <tr class="{{ 'table-danger' if days_overdue > 30 else ('table-warning' if days_overdue > 0 else '') }}">
+                    <!-- ✅ UPDATED: Added voided styling -->
+                    <tr class="{{ 'table-danger' if days_overdue > 30 else ('table-warning' if days_overdue > 0 else '') }} {{ 'table-secondary text-decoration-line-through' if inv.voided_at else '' }}">
                         <td><strong>{{ inv.invoice_number or 'INV-' + inv.id|string }}</strong></td>
                         <td>{{ inv.date.strftime('%Y-%m-%d') }}</td>
                         <td>
@@ -59,20 +61,38 @@
                         <td>{{ inv.vat | money }}</td>
                         <td>{{ inv.paid | money }}</td>
                         <td>{{ balance | money }}</td>
+                        <!-- ✅ UPDATED: Added voided status badge -->
                         <td>
-                            <span class="badge bg-{{ 'success' if inv.status == 'Paid' else ('warning text-dark' if inv.status == 'Partially Paid' else 'danger') }}">
-                                {{ inv.status }}
-                            </span>
+                            {% if inv.voided_at %}
+                                <span class="badge bg-dark">VOIDED</span>
+                            {% else %}
+                                <span class="badge bg-{{ 'success' if inv.status == 'Paid' else ('warning text-dark' if inv.status == 'Partially Paid' else 'danger') }}">
+                                    {{ inv.status }}
+                                </span>
+                            {% endif %}
                         </td>
+                        <!-- ✅ UPDATED: Added void button -->
                         <td>
                             <button class="btn btn-sm btn-outline-info" data-bs-toggle="collapse" data-bs-target="#invoice-{{ inv.id }}">
-                                <i class="bi bi-eye"></i> View Items
+                                <i class="bi bi-eye"></i> View
                             </button>
-                            {% if inv.status != 'Paid' %}
-                            <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#recordPaymentModal" 
-                                onclick="setPaymentDetails('AR', {{ inv.id }}, {{ balance }})">
-                                <i class="bi bi-cash"></i> Collect
-                            </button>
+                            
+                            {% if not inv.voided_at %}
+                                {% if inv.status != 'Paid' %}
+                                <button class="btn btn-sm btn-primary" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#recordPaymentModal" 
+                                        onclick="setPaymentDetails('AR', {{ inv.id }}, {{ balance }})">
+                                    <i class="bi bi-cash"></i> Collect
+                                </button>
+                                {% endif %}
+                                
+                                <button class="btn btn-sm btn-outline-danger" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#voidInvoiceModal"
+                                        onclick="setVoidInvoiceTarget('{{ url_for('void.void_ar_invoice', invoice_id=inv.id) }}', '{{ inv.invoice_number or 'AR-' + inv.id|string }}', {{ inv.paid }})">
+                                    <i class="bi bi-x-circle"></i> Void
+                                </button>
                             {% endif %}
                         </td>
                     </tr>
@@ -80,6 +100,74 @@
                         <td colspan="11" class="p-0">
                             <div class="collapse" id="invoice-{{ inv.id }}">
                                 <div class="card card-body bg-light m-2">
+                                    <!-- ✅ VOID INFO (keep existing) -->
+                                    {% if inv.voided_at %}
+                                    <div class="alert alert-danger mb-3">
+                                        <h6><i class="bi bi-x-circle-fill me-2"></i>Invoice Voided</h6>
+                                        <p class="mb-1"><strong>Voided At:</strong> {{ inv.voided_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                                        <p class="mb-1"><strong>Voided By:</strong> {{ inv.voided_by_user.username if inv.voided_by_user else 'System' }}</p>
+                                        <p class="mb-0"><strong>Reason:</strong> {{ inv.void_reason }}</p>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <!-- ✅ NEW: PAYMENTS SECTION -->
+                                    {% if inv.paid > 0 %}
+                                    <div class="mb-3">
+                                        <h6><strong>Payments Received:</strong></h6>
+                                        <table class="table table-sm table-bordered">
+                                            <thead>
+                                                <tr>
+                                                    <th>Date</th>
+                                                    <th>Amount</th>
+                                                    <th>WHT</th>
+                                                    <th>Method</th>
+                                                    <th>Status</th>
+                                                    <th>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% set payments = [] %}
+                                                {% for p in Payment.query.filter_by(ref_type='AR', ref_id=inv.id).all() %}
+                                                    {% set _ = payments.append(p) %}
+                                                {% endfor %}
+                                                
+                                                {% for payment in payments %}
+                                                <tr class="{{ 'text-decoration-line-through table-secondary' if payment.voided_at else '' }}">
+                                                    <td>{{ payment.date.strftime('%Y-%m-%d %H:%M') }}</td>
+                                                    <td>₱{{ "%.2f"|format(payment.amount) }}</td>
+                                                    <td>₱{{ "%.2f"|format(payment.wht_amount or 0) }}</td>
+                                                    <td>{{ payment.method }}</td>
+                                                    <td>
+                                                        {% if payment.voided_at %}
+                                                            <span class="badge bg-dark">VOIDED</span>
+                                                        {% else %}
+                                                            <span class="badge bg-success">Recorded</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if not payment.voided_at %}
+                                                        <button class="btn btn-sm btn-outline-danger"
+                                                                data-bs-toggle="modal"
+                                                                data-bs-target="#voidPaymentModal"
+                                                                onclick="setVoidPaymentTarget('{{ url_for('void.void_payment', payment_id=payment.id) }}', 'Payment #{{ payment.id }}')">
+                                                            <i class="bi bi-x-circle"></i> Void
+                                                        </button>
+                                                        {% else %}
+                                                            <small class="text-muted">Voided by {{ payment.voided_by_user.username if payment.voided_by_user else 'System' }}</small>
+                                                        {% endif %}
+                                                    </td>
+                                                </tr>
+                                                {% else %}
+                                                <tr>
+                                                    <td colspan="6" class="text-center text-muted">No payments recorded</td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    {% endif %}
+                                    
+                                    <!-- ✅ INVOICE ITEMS (keep existing) -->
                                     <h6><strong>Invoice Items:</strong></h6>
                                     {% if inv.description %}
                                     <p class="mb-2"><em>{{ inv.description }}</em></p>
@@ -123,6 +211,45 @@
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+    </div>
+</div>
+
+<!-- ✅ NEW: Void Invoice Modal -->
+<div class="modal fade" id="voidInvoiceModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="voidInvoiceForm" method="POST">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>Void Invoice
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning">
+                        <strong>Warning:</strong> This will reverse inventory and all accounting entries.
+                    </div>
+                    
+                    <!-- Payment Warning -->
+                    <div id="voidPaymentWarning" class="alert alert-danger d-none">
+                        <strong>Error:</strong> Cannot void invoice with payments. Please void the payments first.
+                    </div>
+                    
+                    <p>Invoice: <strong id="voidInvoiceTargetName"></strong></p>
+                    
+                    <div class="mb-3">
+                        <label class="form-label"><strong>Void Reason *</strong></label>
+                        <textarea name="void_reason" class="form-control" rows="3" placeholder="Enter reason for voiding this invoice..." required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger" id="voidInvoiceSubmitBtn">
+                        <i class="bi bi-x-circle me-1"></i> Void Invoice
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -219,7 +346,7 @@
     </div>
 </div>
 
-<!-- Payment Modal (reuse from ar_invoices.html) -->
+<!-- Payment Modal -->
 <div class="modal fade" id="recordPaymentModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
@@ -254,9 +381,67 @@
     </div>
 </div>
 
+
+<!-- ✅ NEW: Void Payment Modal -->
+<div class="modal fade" id="voidPaymentModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="voidPaymentForm" method="POST">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>Void Payment
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning">
+                        <strong>Warning:</strong> This will reverse the payment and restore the invoice balance.
+                    </div>
+                    <p>Payment: <strong id="voidPaymentTargetName"></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label"><strong>Void Reason *</strong></label>
+                        <textarea name="void_reason" class="form-control" rows="3" placeholder="Enter reason for voiding this payment..." required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-x-circle me-1"></i> Void Payment
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
 let lineItemCounter = 0;
 const products = {{ products | tojson }};
+
+// ✅ NEW: Void invoice function with payment check
+function setVoidInvoiceTarget(actionUrl, targetName, paidAmount) {
+    document.getElementById('voidInvoiceForm').action = actionUrl;
+    document.getElementById('voidInvoiceTargetName').textContent = targetName;
+    
+    // Check if invoice has payments
+    const warningDiv = document.getElementById('voidPaymentWarning');
+    const submitBtn = document.getElementById('voidInvoiceSubmitBtn');
+    
+    if (paidAmount > 0) {
+        warningDiv.classList.remove('d-none');
+        submitBtn.disabled = true;
+    } else {
+        warningDiv.classList.add('d-none');
+        submitBtn.disabled = false;
+    }
+}
+
+
+// ✅ NEW: Void payment function
+function setVoidPaymentTarget(actionUrl, targetName) {
+    document.getElementById('voidPaymentForm').action = actionUrl;
+    document.getElementById('voidPaymentTargetName').textContent = targetName;
+}
 
 function addLineItem() {
     lineItemCounter++;
@@ -392,7 +577,7 @@ function updatePaymentTerms() {
     document.getElementById('paymentTermsDisplay').textContent = paymentTerms;
 }
 
-// Handle modal events - COMBINED into one listener
+// Handle modal events
 document.getElementById('newBillingInvoiceModal').addEventListener('shown.bs.modal', function () {
     const container = document.getElementById('lineItemsContainer');
     

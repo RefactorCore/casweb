@@ -88,7 +88,7 @@
         </thead>
         <tbody>
           {% for s in sales %}
-          <tr>
+          <tr class="{{ 'table-secondary text-decoration-line-through' if s.status == 'voided' else '' }}">
             <!-- Type Badge -->
             <td>
               {% if s.type == 'Cash Sale' %}
@@ -136,7 +136,9 @@
             
             <!-- Status -->
             <td>
-              {% if s.status == 'Paid' or s.status == 'paid' %}
+              {% if s.status == 'voided' %}
+                <span class="badge bg-dark">VOIDED</span>
+              {% elif s.status == 'Paid' or s.status == 'paid' %}
                 <span class="badge bg-success">Paid</span>
               {% elif s.status == 'Partially Paid' %}
                 <span class="badge bg-warning text-dark">Partial</span>
@@ -155,20 +157,22 @@
                 <a href="{{ url_for('core.view_sale', sale_id=s.id) }}" class="btn btn-sm btn-outline-info" title="View Details">
                   <i class="bi bi-eye"></i>
                 </a>
+                {% if s.status != 'voided' %}
                 <a href="{{ url_for('core.print_receipt', sale_id=s.id) }}" class="btn btn-sm btn-outline-primary" target="_blank" title="Print Receipt">
                   <i class="bi bi-printer"></i>
                 </a>
+                <button class="btn btn-sm btn-outline-danger" 
+                        data-bs-toggle="modal" 
+                        data-bs-target="#voidModal"
+                        onclick="setVoidTarget('{{ url_for('void.void_sale', sale_id=s.id) }}', 'Sale #{{ s.id }} ({{ s.document_number }})')"
+                        title="Void Sale">
+                  <i class="bi bi-x-circle"></i>
+                </button>
+                {% endif %}
               {% else %}
                 <a href="{{ url_for('ar_ap.billing_invoices') }}" class="btn btn-sm btn-outline-info" title="View Invoice">
                   <i class="bi bi-file-earmark-text"></i>
                 </a>
-                {% if s.status != 'Paid' %}
-<!--                 <button class="btn btn-sm btn-outline-success" 
-                        data-bs-toggle="tooltip" 
-                        title="Go to AR Invoices to collect payment">
-                  <i class="bi bi-cash-coin"></i>
-                </button> -->
-                {% endif %}
               {% endif %}
             </td>
           </tr>
@@ -216,13 +220,50 @@
 </nav>
 {% endif %}
 
-<!-- Bootstrap Tooltip Initialization -->
+<!-- Void Confirmation Modal -->
+<div class="modal fade" id="voidModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="voidForm" method="POST">
+        <div class="modal-header bg-danger text-white">
+          <h5 class="modal-title">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>Void Transaction
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-warning">
+            <strong>Warning:</strong> This action cannot be undone. All related journal entries will be reversed.
+          </div>
+          <p>You are about to void: <strong id="voidTargetName"></strong></p>
+          <div class="mb-3">
+            <label class="form-label"><strong>Void Reason *</strong></label>
+            <textarea name="void_reason" class="form-control" rows="3" placeholder="Enter the reason for voiding this transaction..." required></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-danger">
+            <i class="bi bi-x-circle me-1"></i> Void Transaction
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <script>
-  document.addEventListener('DOMContentLoaded', function() {
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-      return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
+function setVoidTarget(actionUrl, targetName) {
+  document.getElementById('voidForm').action = actionUrl;
+  document.getElementById('voidTargetName').textContent = targetName;
+}
+
+// Bootstrap Tooltip Initialization
+document.addEventListener('DOMContentLoaded', function() {
+  var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+  var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+    return new bootstrap.Tooltip(tooltipTriggerEl);
   });
+});
 </script>
 {% endblock %}
