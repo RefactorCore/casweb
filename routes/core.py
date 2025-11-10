@@ -13,6 +13,7 @@ from flask_login import login_user, logout_user, login_required, current_user
 from routes.decorators import role_required
 from .utils import log_action
 from extensions import limiter
+from routes.sku_utils import generate_sku
 
 core_bp = Blueprint('core', __name__)
 VAT_RATE = Config.VAT_RATE
@@ -358,6 +359,7 @@ def toggle_product_status(product_id):
 def inventory_bulk_add():
     if request.method == 'POST':
         from routes.fifo_utils import create_inventory_lot
+        from routes.sku_utils import generate_sku  # ✅ ADD THIS
         
         if 'csv_file' not in request.files:
             flash('No file part', 'danger')
@@ -376,11 +378,12 @@ def inventory_bulk_add():
             stream = io.StringIO(file.stream.read().decode("UTF-8"), newline=None)
             csv_reader = csv.reader(stream)
             
-            next(csv_reader, None)  # Skip header
+            header = next(csv_reader, None)  # Get header row
             
             products_added = 0
             total_value = 0.0
             errors = []
+            skipped_count = 0
 
             try:
                 inventory_code = get_system_account_code('Inventory')
@@ -389,41 +392,47 @@ def inventory_bulk_add():
                 flash(f'An error occurred finding system accounts: {str(e)}', 'danger')
                 return redirect(request.url)
             
-            # ✅ ADDED: Track what we're adding for debugging
             debug_items = []
             
-            for row_num, row in enumerate(csv_reader, start=2):  # Start at 2 (after header)
-                # ✅ FIXED: Skip completely empty rows silently
+            for row_num, row in enumerate(csv_reader, start=2):
+                # Skip completely empty rows
                 if not row or all(cell.strip() == '' for cell in row):
-                    continue  # Don't log empty rows as errors
+                    continue
                 
-                # ✅ FIXED: Validate we have enough columns
-                if len(row) < 5:
-                    errors.append(f"Row {row_num}: Not enough columns (expected 5, got {len(row)})")
+                # ✅ UPDATED: CSV now only requires name, sale_price, cost_price, quantity
+                # SKU column is IGNORED (always auto-generated)
+                if len(row) < 4:
+                    errors.append(f"Row {row_num}: Not enough columns (expected at least 4: name, sale_price, cost_price, quantity)")
+                    skipped_count += 1
                     continue
 
                 try:
-                    sku = row[0].strip()
-                    name = row[1].strip()
-                    sale_price = float(row[2] or 0.0)
-                    cost_price = float(row[3] or 0.0)
-                    quantity = int(row[4] or 0)
+                    # ✅ UPDATED: Parse without SKU (SKU will be auto-generated)
+                    # Expected format: name, sale_price, cost_price, quantity, [optional: category]
+                    name = row[0].strip() if len(row) > 0 else ''
+                    sale_price = float(row[1] or 0.0) if len(row) > 1 else 0.0
+                    cost_price = float(row[2] or 0.0) if len(row) > 2 else 0.0
+                    quantity = int(row[3] or 0) if len(row) > 3 else 0
+                    category = row[4].strip() if len(row) > 4 and row[4].strip() else None
                     
-                    # ✅ FIXED: Better validation
-                    if not sku or not name:
-                        errors.append(f"Row {row_num}: Missing SKU or Name")
+                    if not name:
+                        errors.append(f"Row {row_num}: Missing product name")
+                        skipped_count += 1
                         continue
 
-                    # ✅ ADDED: Check for duplicates in DB
-                    existing_sku = Product.query.filter_by(sku=sku).first()
-                    if existing_sku:
-                        errors.append(f"Row {row_num}: SKU '{sku}' already exists. Skipped.")
+                    # ✅ NEW: Auto-generate SKU
+                    try:
+                        sku = generate_sku(name, category=category)
+                    except ValueError as e:
+                        errors.append(f"Row {row_num}: {str(e)}")
+                        skipped_count += 1
                         continue
 
                     # Create product
                     new_prod = Product(
                         sku=sku,
                         name=name,
+                        category=category,  # ✅ Store category
                         sale_price=sale_price,
                         cost_price=cost_price,
                         quantity=quantity
@@ -431,11 +440,10 @@ def inventory_bulk_add():
                     db.session.add(new_prod)
                     db.session.flush()
 
-                    # ✅ ADDED: Only create opening balance if qty and cost > 0
+                    # Create opening balance if qty and cost > 0
                     if quantity > 0 and cost_price > 0:
                         initial_value = round(quantity * cost_price, 2)
                         
-                        # ✅ ADDED: Debug tracking
                         debug_items.append({
                             'sku': sku,
                             'name': name,
@@ -471,38 +479,43 @@ def inventory_bulk_add():
                 except ValueError as e:
                     db.session.rollback()
                     errors.append(f"Row {row_num}: Invalid number format - {str(e)}")
+                    skipped_count += 1
                 except Exception as e:
                     db.session.rollback()
                     errors.append(f"Row {row_num}: {str(e)}")
+                    skipped_count += 1
             
-            # ✅ ADDED: Show detailed breakdown
-            flash(f'Successfully added {products_added} products.', 'success')
+            flash(f'✅ Successfully added {products_added} products with auto-generated SKUs.', 'success')
             if total_value > 0:
-                flash(f'Recorded ₱{total_value:,.2f} in Beginning Inventory Value.', 'info')
+                flash(f'📊 Recorded ₱{total_value:,.2f} in Beginning Inventory Value.', 'info')
                 
-                # ✅ ADDED: Debug output (remove this after testing)
-                print("\n=== DEBUG: Inventory Upload Breakdown ===")
+                # Debug output
+                print("\n=== DEBUG: Auto-SKU Bulk Upload ===")
                 for item in debug_items:
-                    print(f"{item['sku']}: {item['qty']} × ₱{item['cost']} = ₱{item['value']}")
+                    print(f"{item['sku']}: {item['name']} | {item['qty']} × ₱{item['cost']} = ₱{item['value']}")
                 print(f"TOTAL: ₱{total_value}")
                 print("=" * 40)
             
             if errors:
-                flash(f'{len(errors)} rows had issues:', 'warning')
-                for error in errors[:5]:  # Show first 5 errors only
+                flash(f'⚠️ {skipped_count} rows were skipped:', 'warning')
+                for error in errors[:10]:  # Show first 10 errors
                     flash(error, 'danger')
-                if len(errors) > 5:
-                    flash(f'... and {len(errors) - 5} more errors', 'danger')
+                if len(errors) > 10:
+                    flash(f'... and {len(errors) - 10} more errors', 'danger')
             
-            log_action(f'Bulk-added {products_added} products with total beginning value of ₱{total_value:,.2f}.')
+            log_action(f'Bulk-added {products_added} products with auto-generated SKUs. Total value: ₱{total_value:,.2f}.')
             return redirect(url_for('core.inventory'))
 
         except Exception as e:
             db.session.rollback()
-            flash(f'An error occurred processing the file: {str(e)}', 'danger')
+            flash(f'❌ An error occurred processing the file: {str(e)}', 'danger')
             return redirect(request.url)
 
-    return render_template('inventory_bulk_add.html')
+    # ✅ NEW: Pass category suggestions to template
+    from routes.sku_utils import get_category_suggestions
+    categories = get_category_suggestions()
+    
+    return render_template('inventory_bulk_add.html', categories=categories)
 
 
 @core_bp.route('/api/add_multiple_products', methods=['POST'])
@@ -689,14 +702,19 @@ def purchase():
 
                 product = Product.query.filter_by(sku=sku).first()
                 if not product:
+                    # ✅ NEW: Auto-generate SKU for new products from purchases
+                    auto_sku = generate_sku(name)
+                    
                     product = Product(
-                        sku=sku,
+                        sku=auto_sku,  # ✅ Use auto-generated SKU
                         name=name,
                         sale_price=round(unit_cost * 1.5, 2),
                         cost_price=unit_cost,
                         quantity=qty,
                         is_active=True
                     )
+                    
+                    flash(f'ℹ️ New product created with auto-SKU: {auto_sku} ({name})', 'info')
                     db.session.add(product)
                     db.session.flush()
                 else:
@@ -923,7 +941,7 @@ def pos():
     end_idx = start_idx + per_page
     paginated_items = combined_items[start_idx:end_idx]
     
-    # Create pagination object
+    # ✅ FIXED: Complete Pagination class with iter_pages method
     class Pagination:
         def __init__(self, page, per_page, total_count, total_pages):
             self.page = page
@@ -934,6 +952,21 @@ def pos():
             self.has_next = page < total_pages
             self.prev_num = page - 1 if self.has_prev else None
             self.next_num = page + 1 if self.has_next else None
+        
+        def iter_pages(self, left_edge=2, left_current=2, right_current=5, right_edge=2):
+            """
+            Generate page numbers for pagination display.
+            Mimics Flask-SQLAlchemy's pagination.iter_pages() method.
+            """
+            last = 0
+            for num in range(1, self.pages + 1):
+                if (num <= left_edge or 
+                    (num > self.page - left_current - 1 and num < self.page + right_current) or
+                    num > self.pages - right_edge):
+                    if last + 1 != num:
+                        yield None  # Ellipsis
+                    yield num
+                    last = num
     
     pagination = Pagination(page, per_page, total_items, total_pages)
     safe_args = {k: v for k, v in request.args.items() if k != 'page'}
