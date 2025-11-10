@@ -12,6 +12,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from extensions import limiter
 from passlib.hash import pbkdf2_sha256
+from routes.void_transactions import void_bp 
 
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
@@ -73,6 +74,7 @@ def create_app():
     from routes.reports import reports_bp
     from routes.users import user_bp
     from routes.consignment import consignment_bp
+    from routes.void_transactions import void_bp
 
 
     app.register_blueprint(core_bp)
@@ -80,6 +82,7 @@ def create_app():
     app.register_blueprint(reports_bp)
     app.register_blueprint(user_bp)
     app.register_blueprint(consignment_bp)
+    app.register_blueprint(void_bp)
 
     return app
 

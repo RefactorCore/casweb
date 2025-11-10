@@ -108,6 +108,12 @@ class Sale(db.Model):
     discount_input = db.Column(db.Float, nullable=True)         # the user-entered percentage or fixed amount
     discount_value = db.Column(db.Float, nullable=True, default=0.0)  # resolved currency amount
 
+    voided_at = db.Column(db.DateTime, nullable=True)
+    voided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    void_reason = db.Column(db.String(500), nullable=True)
+    voided_by_user = db.relationship('User', foreign_keys=[voided_by])
+
+
 class SaleItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sale_id = db.Column(db.Integer, db.ForeignKey('sale.id'), nullable=False)
@@ -129,6 +135,12 @@ class Purchase(db.Model):
     status = db.Column(db.String(50), default='Recorded', nullable=False)
     items = db.relationship('PurchaseItem', backref='purchase', cascade='all, delete-orphan')
 
+
+    voided_at = db.Column(db.DateTime, nullable=True)
+    voided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    void_reason = db.Column(db.String(500), nullable=True)
+    voided_by_user = db.relationship('User', foreign_keys=[voided_by])
+
 class PurchaseItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     purchase_id = db.Column(db.Integer, db.ForeignKey('purchase.id'), nullable=False)
@@ -144,6 +156,11 @@ class JournalEntry(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     description = db.Column(db.String(400))
     entries_json = db.Column(db.Text)
+
+    voided_at = db.Column(db.DateTime, nullable=True)
+    voided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    void_reason = db.Column(db.String(500), nullable=True)
+    voided_by_user = db.relationship('User', foreign_keys=[voided_by])
 
     def entries(self):
         try:
@@ -189,6 +206,11 @@ class ARInvoice(db.Model):
     invoice_number = db.Column(db.String(50), unique=True, nullable=True)
     description = db.Column(db.String(400))
     items = db.relationship('ARInvoiceItem', backref='ar_invoice', cascade='all, delete-orphan')
+
+    voided_at = db.Column(db.DateTime, nullable=True)
+    voided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    void_reason = db.Column(db.String(500), nullable=True)
+    voided_by_user = db.relationship('User', foreign_keys=[voided_by])
     
     # ADD THIS METHOD
     def days_overdue(self):
@@ -215,6 +237,12 @@ class APInvoice(db.Model):
     is_vatable = db.Column(db.Boolean, nullable=False, default=True)
     expense_account_code = db.Column(db.String(32), db.ForeignKey('account.code'))
 
+
+    voided_at = db.Column(db.DateTime, nullable=True)
+    voided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    void_reason = db.Column(db.String(500), nullable=True)
+    voided_by_user = db.relationship('User', foreign_keys=[voided_by])
+
 class Payment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.DateTime, default=datetime.utcnow)
@@ -223,6 +251,11 @@ class Payment(db.Model):
     ref_id = db.Column(db.Integer)
     method = db.Column(db.String(50))
     wht_amount = db.Column(db.Float, default=0.0)
+
+    voided_at = db.Column(db.DateTime, nullable=True)
+    voided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    void_reason = db.Column(db.String(500), nullable=True)
+    voided_by_user = db.relationship('User', foreign_keys=[voided_by])
 
 class CreditMemo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -245,7 +278,12 @@ class StockAdjustment(db.Model):
     reason = db.Column(db.String(255), nullable=False) # e.g., 'Spoilage', 'Physical Count Correction'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    user = db.relationship('User')
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    voided_at = db.Column(db.DateTime, nullable=True)
+    voided_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    void_reason = db.Column(db.String(500), nullable=True)
+    voided_by_user = db.relationship('User', foreign_keys=[voided_by])
 
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
