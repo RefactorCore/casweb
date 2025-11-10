@@ -1,4 +1,4 @@
-﻿sku,name,sale_price,cost_price,quantity
-TIR-LEO-001,Leo tires,1000,900,10
-FIL-AIR-002,Air Filter Element,150,75,15
-CAB-CLT-003,Clutch Cable,80,50,20
+﻿name,sale_price,cost_price,quantity
+Leo tires,1000,900,10
+Air Filter Element,150,75,15
+Clutch Cable,80,50,20
