@@ -17,6 +17,7 @@ class CompanyProfile(db.Model):
     next_si_number = db.Column(db.Integer, default=1)
     next_invoice_number = db.Column(db.Integer, default=1)
     next_consignment_number = db.Column(db.Integer, default=1)
+    branch = db.Column(db.String(100), nullable=True)
 
 class Account(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -559,3 +560,34 @@ class ConsignmentRemittance(db.Model):
 
     def __repr__(self):
         return f'<ConsignmentRemittance {self.id} for {self.consignment_id}>'
+
+
+class Branch(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False, unique=True)
+    address = db.Column(db.String(300), nullable=True)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class InventoryMovement(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    movement_type = db.Column(db.String(20), nullable=False)  # 'receive' or 'transfer'
+    from_branch_id = db.Column(db.Integer, db.ForeignKey('branch.id'), nullable=True)
+    to_branch_id = db.Column(db.Integer, db.ForeignKey('branch.id'), nullable=True)
+    reference_number = db.Column(db.String(50), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+    from_branch = db.relationship('Branch', foreign_keys=[from_branch_id])
+    to_branch = db.relationship('Branch', foreign_keys=[to_branch_id])
+    items = db.relationship('InventoryMovementItem', backref='movement', cascade='all, delete-orphan')
+
+class InventoryMovementItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    movement_id = db.Column(db.Integer, db.ForeignKey('inventory_movement.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+    unit_cost = db.Column(db.Float, nullable=False)
+
+    product = db.relationship('Product')
