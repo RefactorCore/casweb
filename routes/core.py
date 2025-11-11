@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file, Response, session
-from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry, StockAdjustment, Account, Supplier
+from models import db, User, Product, Purchase, PurchaseItem, Sale, SaleItem, JournalEntry, StockAdjustment, Account, Supplier, Branch, InventoryMovement, InventoryMovementItem
 import json
 from config import Config
 from datetime import datetime, timedelta
@@ -38,6 +38,7 @@ def setup_company():
         tin = request.form.get('tin')
         address = request.form.get('address')
         style = request.form.get('business_style')
+        branch = request.form.get('branch')
 
         if not name or not tin or not address:
             flash('Please fill out all company details.', 'warning')
@@ -45,8 +46,17 @@ def setup_company():
 
         license_key = session.pop('validated_license_key', None)
 
-        profile = CompanyProfile(name=name, tin=tin, address=address, business_style=style)
+        profile = CompanyProfile(name=name, tin=tin, address=address, business_style=style, branch=branch)
         db.session.add(profile)
+        
+        # Auto-create Branch record if branch is provided
+        if branch:
+            from models import Branch
+            existing_branch = Branch.query.filter_by(name=branch).first()
+            if not existing_branch:
+                new_branch = Branch(name=branch, address='')
+                db.session.add(new_branch)
+        
         db.session.commit()
         return redirect(url_for('core.setup_admin'))
     return render_template('setup/company.html')
@@ -1895,6 +1905,14 @@ def settings():
         profile.tin = request.form.get('tin')
         profile.address = request.form.get('address')
         profile.business_style = request.form.get('business_style')
+        profile.branch = request.form.get('branch')
+        
+        # Auto-create Branch record if company branch doesn't exist
+        if profile.branch and not Branch.query.filter_by(name=profile.branch).first():
+            new_branch = Branch(name=profile.branch, address='', is_active=True)
+            db.session.add(new_branch)
+            log_action(f'Auto-created branch: {profile.branch} from company settings.')
+        
         log_action(f'Updated Company Profile settings.')
         db.session.commit()
         flash('Company profile updated successfully!', 'success')
@@ -2038,3 +2056,183 @@ def inventory_lots(product_id):
                          total_value=total_value,
                          avg_cost=avg_cost,
                          reconciliation=reconciliation)
+
+
+@core_bp.route('/inventory-movement/create', methods=['POST'])
+@login_required
+@role_required('Admin', 'Accountant')
+def create_inventory_movement():
+    movement_type = request.form.get('movement_type') or request.json.get('movement_type')
+    from_branch_id = request.form.get('from_branch_id') or request.json.get('from_branch_id')
+    to_branch_id = request.form.get('to_branch_id') or request.json.get('to_branch_id')
+    notes = request.form.get('notes') or request.json.get('notes')
+    
+    if movement_type not in ['receive', 'transfer']:
+        return jsonify({'error': 'Invalid movement type'}), 400
+
+    # Handle CSV upload for receive
+    items = []
+    if movement_type == 'receive' and 'csv_file' in request.files:
+        file = request.files['csv_file']
+        if file.filename.endswith('.csv'):
+            stream = io.StringIO(file.stream.read().decode("UTF-8"), newline=None)
+            csv_reader = csv.reader(stream)
+            for i, row in enumerate(csv_reader):
+                if i == 0 and len(row) >= 1 and row[0].lower() == 'sku':  # Skip header row
+                    continue
+                if len(row) >= 5:
+                    sku, productname, sale_price, cost_price, qty = row[0], row[1], float(row[2]), float(row[3]), int(row[4])
+                    product = Product.query.filter_by(sku=sku).first()
+                    if product:
+                        items.append({'sku': sku, 'quantity': qty, 'unit_cost': cost_price})
+        else:
+            return jsonify({'error': 'Invalid CSV file for receive'}), 400
+    else:
+        # Manual entry (from JSON)
+        items_raw = request.form.getlist('items[][sku]') or request.json.get('items', [])
+        if items_raw and isinstance(items_raw, list):
+            for item in items_raw:
+                if isinstance(item, dict):
+                    sku = item.get('sku')
+                    quantity = item.get('quantity')
+                    unit_cost = item.get('unit_cost')
+                    items.append({'sku': sku, 'quantity': quantity, 'unit_cost': unit_cost})
+        else:
+            # Fallback for form data
+            quantities = request.form.getlist('items[][quantity]')
+            unit_costs = request.form.getlist('items[][unit_cost]')
+            for i in range(len(items_raw)):
+                sku = items_raw[i]
+                quantity = int(quantities[i])
+                unit_cost = float(unit_costs[i])
+                items.append({'sku': sku, 'quantity': quantity, 'unit_cost': unit_cost})
+
+    if not items:
+        return jsonify({'error': 'No items provided'}), 400
+
+    movement = InventoryMovement(
+        movement_type=movement_type,
+        from_branch_id=from_branch_id,
+        to_branch_id=to_branch_id,
+        notes=notes,
+        created_by=current_user.id
+    )
+    db.session.add(movement)
+    db.session.flush()  # Get movement.id
+
+    for item in items:
+        sku = item['sku']
+        quantity = item['quantity']
+        unit_cost = item['unit_cost']
+        
+        # Look up product by SKU
+        product = Product.query.filter_by(sku=sku).first()
+        if not product:
+            return jsonify({'error': f'Product with SKU {sku} not found'}), 400
+        
+        product_id = product.id
+        
+        movement_item = InventoryMovementItem(
+            movement_id=movement.id,
+            product_id=product_id,
+            quantity=quantity,
+            unit_cost=unit_cost
+        )
+        db.session.add(movement_item)
+
+        # Adjust inventory quantities (simplified - assumes central inventory for now)
+        if movement_type == 'transfer' and from_branch_id:
+            product.adjust_stock(-quantity)  # Reduce from source
+        elif movement_type == 'receive' and to_branch_id:
+            product.adjust_stock(quantity)  # Increase at destination
+
+    db.session.commit()
+    
+    # Prepare response data for dynamic update
+    from_branch_name = movement.from_branch.name if movement.from_branch else 'N/A'
+    to_branch_name = movement.to_branch.name if movement.to_branch else 'N/A'
+    items_count = len(movement.items)
+    
+    return jsonify({
+    'success': True, 
+    'message': 'Movement recorded successfully',
+    'movement': {
+        'id': movement.id,
+        'date': movement.created_at.strftime('%Y-%m-%d'),
+        'type': movement.movement_type.title(),
+        'from': from_branch_name,
+        'to': to_branch_name,
+        'items': items_count,
+        'notes': movement.notes or '-'
+        },
+        'download_url': url_for('core.export_movement_csv', movement_id=movement.id) if movement.movement_type == 'transfer' else None
+    })
+
+@core_bp.route('/branches', methods=['GET', 'POST'])
+@login_required
+@role_required('Admin')
+def manage_branches():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        address = request.form.get('address')
+        if not name:
+            flash('Branch name is required', 'danger')
+            return redirect(url_for('core.manage_branches'))
+        
+        branch = Branch(name=name, address=address)
+        db.session.add(branch)
+        db.session.commit()
+        flash('Branch added successfully', 'success')
+        return redirect(url_for('core.manage_branches'))
+    
+    branches = Branch.query.all()
+    return render_template('manage_branches.html', branches=branches)
+
+@core_bp.route('/inventory-movement')
+@login_required
+@role_required('Admin', 'Accountant')
+def inventory_movement():
+    branches = Branch.query.filter_by(is_active=True).all()
+    movements = InventoryMovement.query.order_by(InventoryMovement.created_at.desc()).all()
+    all_active_products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
+    
+    # Get default branch from company profile
+    company = CompanyProfile.query.first()
+    default_branch_id = None
+    if company and company.branch:
+        default_branch = Branch.query.filter_by(name=company.branch, is_active=True).first()
+        if default_branch:
+            default_branch_id = default_branch.id
+    
+    return render_template('inventory_movement.html', branches=branches, movements=movements, all_active_products=all_active_products, default_branch_id=default_branch_id)
+
+@core_bp.route('/inventory-movement/export/<int:movement_id>')
+@login_required
+@role_required('Admin', 'Accountant')
+def export_movement_csv(movement_id):
+    movement = InventoryMovement.query.get_or_404(movement_id)
+    items = InventoryMovementItem.query.filter_by(movement_id=movement_id).all()
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['sku', 'productname', 'sale_price', 'cost_price', 'qty'])  # Updated header
+    
+    for item in items:
+        product = Product.query.get(item.product_id)
+        if product:
+            writer.writerow([
+                product.sku,
+                product.name,
+                product.sale_price,
+                product.cost_price,
+                item.quantity
+            ])
+    
+    output.seek(0)
+    filename = f"movement_{movement_id}_{movement.movement_type}.csv"
+    
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
