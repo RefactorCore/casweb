@@ -88,11 +88,14 @@
       <a href="{{ url_for('consignment.suppliers') }}" class="{% if '/consignment' in request.path %}active{% endif %}">
         <i class="bi bi-box2-heart me-2"></i> Consignment
       </a>
-      <a href="{{ url_for('core.inventory') }}" class="{% if '/inventory' in request.path or '/stock-card' in request.path %}active{% endif %}">
+      <a href="{{ url_for('core.inventory') }}" class="{% if request.endpoint == 'core.inventory' %}active{% endif %}">
         <i class="bi bi-box-seam me-2"></i> Inventory
       </a>
-      <a href="{{ url_for('core.stock_adjustments') }}" class="{% if '/inventory' in request.path or '/stock-card' in request.path %}active{% endif %}">
+      <a href="{{ url_for('core.stock_adjustments') }}" class="{% if request.endpoint == 'core.stock_adjustments' %}active{% endif %}">
         <i class="bi bi-arrow-down-up"></i> Stock Adjustments
+      </a>
+      <a href="{{ url_for('core.inventory_movement') }}" class="{% if request.endpoint == 'core.inventory_movement' %}active{% endif %}">
+        <i class="bi bi-arrow-left-right"></i> Inventory Movement
       </a>
       <a href="{{ url_for('core.purchase') }}" class="{% if '/purchase' == request.path %}active{% endif %}">
         <i class="bi bi-bag-plus me-2"></i> New Purchase

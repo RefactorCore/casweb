@@ -27,6 +27,10 @@
             <label class="form-label">Address</label>
             <input type="text" name="address" class="form-control" value="{{ profile.address }}" required>
         </div>
+        <div class="mb-3">
+            <label class="form-label">Branch</label>
+            <input type="text" name="branch" class="form-control" value="{{ profile.branch or '' }}" placeholder="e.g., Main Branch">
+        </div>
          <div class="mb-3">
             <label class="form-label">License Key</label>
             <input type="text" class="form-control" value="{{ profile.license_key or 'N/A' }}" disabled readonly>
