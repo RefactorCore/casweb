@@ -149,6 +149,13 @@
   .summary-row strong { font-size: 1.05rem; }
   .checkout-actions { display:flex; gap:10px; margin-top:8px; }
   .btn-wide { flex:1; }
+  
+  /* */
+  .btn-sc-pwd.active {
+    background-color: #0d6efd;
+    color: #fff;
+    border-color: #0d6efd;
+  }
 
   /* Modals and receipt */
   #calcModal .modal-content { border-radius: 12px; }
@@ -253,12 +260,20 @@
 
       <div style="display:flex; gap:8px; margin-bottom:10px;">
         <input id="customerName" class="form-control form-control-sm" placeholder="Customer name (optional)" value="" aria-label="Customer name">
+      </div>
+      
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
         <select id="discountType" class="form-select form-select-sm" style="width:130px;">
           <option value="percent">Discount %</option>
           <option value="fixed">Fixed ₱</option>
         </select>
         <input id="discountValue" class="form-control form-control-sm" placeholder="0" value="0" style="width:100px;" aria-label="Discount value">
+        
+        <button id="scPwdButton" class="btn btn-sm btn-outline-primary btn-sc-pwd" style="flex:1; white-space: nowrap;">
+          Senior / PWD
+        </button>
       </div>
+
 
       <div class="cart-list" id="cartList" aria-live="polite"></div>
 
@@ -289,7 +304,6 @@
   </div>
 </div>
 
-<!-- Quantity modal -->
 <div class="modal fade" id="qtyModal" tabindex="-1">
   <div class="modal-dialog modal-sm modal-dialog-centered">
     <div class="modal-content">
@@ -309,13 +323,12 @@
   </div>
 </div>
 
-<!-- Cash calculator modal -->
 <div class="modal fade" id="calcModal" tabindex="-1">
   <div class="modal-dialog modal-sm modal-dialog-centered">
     <div class="modal-content shadow-lg border-0" style="border-radius: 1rem;">
       <div class="modal-body p-4">
         <h5 class="text-center text-primary fw-bold mb-3">Enter Cash Tendered</h5>
-        <input type="text" id="cashInput" class="form-control form-control-lg text-end fs-3 mb-3" readonly placeholder="0.00" aria-label="Cash tendered">
+        <input type="text" id="cashInput" class="form-control form-control-lg text-end FS-3 mb-3" readonly placeholder="0.00" aria-label="Cash tendered">
         <div class="container-fluid p-0">
           <div class="row g-2">
             <div class="col-4"><button class="btn btn-lg btn-outline-secondary w-100 py-3" onclick="press('7')">7</button></div>
@@ -350,7 +363,6 @@
   </div>
 </div>
 
-<!-- Receipt modal -->
 <div class="modal fade" id="receiptModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
@@ -378,6 +390,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
   let cart = [];
   let lastReceiptId = null;
+  let isScPwdDiscount = false;
 
   // Modal refs
   const qtyModalEl = document.getElementById('qtyModal');
@@ -395,6 +408,7 @@ document.addEventListener("DOMContentLoaded", function() {
   const discountTypeEl = document.getElementById('discountType');
   const discountValueEl = document.getElementById('discountValue');
   const customerNameEl = document.getElementById('customerName');
+  const scPwdButton = document.getElementById('scPwdButton');
 
   // Reusable formatting
   function fmt(n) { return '₱' + (n || 0).toFixed(2); }
@@ -402,6 +416,10 @@ document.addEventListener("DOMContentLoaded", function() {
 
   // Compute discount value based on type (applies to GROSS subtotal)
   function computeDiscount(subtotalGross) {
+    if (isScPwdDiscount) {
+      return 0; // UI defers to server for SC/PWD accurate discount
+    }
+
     const type = discountTypeEl.value;
     const raw = parseFloat(discountValueEl.value || 0) || 0;
     if (raw <= 0) return 0;
@@ -472,22 +490,48 @@ document.addEventListener("DOMContentLoaded", function() {
       cartListEl.append(row);
     });
 
-    // VAT-INCLUSIVE totals
     const subtotal = round2(subtotalGross);
-    const discount = computeDiscount(subtotalGross);
-    const discountedGross = round2(Math.max(0, subtotalGross - discount));
-    const isVatable = saleIsVatableEl.checked;
+    let discount = 0;
+    let discountedGross = subtotal;
+    
+    // VAT_RATE from server config
+    const VAT_RATE = {{ (config.VAT_RATE) }}; 
 
     let vatAmount = 0;
-    let vatableSalesNet = discountedGross; // will subtract VAT below if vatable
+    let vatableSalesNet = discountedGross;
 
-    if (isVatable) {
-      const VAT_RATE = {{ (config.VAT_RATE) }};
-      vatAmount = round2(discountedGross * (VAT_RATE / (1 + VAT_RATE)));
-      vatableSalesNet = round2(discountedGross - vatAmount);
+    if (isScPwdDiscount) {
+        saleIsVatableEl.checked = true;
+        saleIsVatableEl.disabled = true;
+        
+        discountTypeEl.disabled = true;
+        discountValueEl.disabled = true;
+        discountValueEl.value = '20';
+        discountTypeEl.value = 'percent';
+        scPwdButton.classList.add('active');
+
+        // Approximate UI numbers (server will determine authoritative values)
+        const netBase = round2(subtotalGross / (1 + VAT_RATE));
+        discount = round2(netBase * 0.20);
+        discountedGross = round2(netBase - discount);
+        vatableSalesNet = discountedGross;
+        vatAmount = 0.00;
     } else {
-      vatAmount = 0;
-      vatableSalesNet = discountedGross;
+        discount = computeDiscount(subtotalGross);
+        discountedGross = round2(Math.max(0, subtotalGross - discount));
+        saleIsVatableEl.disabled = false;
+        discountTypeEl.disabled = false;
+        discountValueEl.disabled = false;
+        scPwdButton.classList.remove('active');
+
+        const isVatable = saleIsVatableEl.checked;
+        if (isVatable) {
+          vatAmount = round2(discountedGross * (VAT_RATE / (1 + VAT_RATE)));
+          vatableSalesNet = round2(discountedGross - vatAmount);
+        } else {
+          vatAmount = 0;
+          vatableSalesNet = discountedGross;
+        }
     }
 
     const total = round2(discountedGross);
@@ -520,8 +564,7 @@ document.addEventListener("DOMContentLoaded", function() {
     renderCart();
   }
 
-  // Product card click: add once with qty=1 if not already in cart
-  // Product card click: add once with qty=1 if not already in cart
+  // Product card click
   document.querySelectorAll('.product-card').forEach(el => {
     el.addEventListener('click', () => {
         const sku = el.dataset.sku;
@@ -535,7 +578,6 @@ document.addEventListener("DOMContentLoaded", function() {
         const existing = cart.find(i => i.sku === sku);
 
         if (existing) {
-            // Product already in cart — do nothing
             return;
         }
 
@@ -591,6 +633,8 @@ document.addEventListener("DOMContentLoaded", function() {
     if (!cart.length) return;
     if (!confirm('Clear all items from cart?')) return;
     cart = [];
+    isScPwdDiscount = false;
+    discountValueEl.value = '0';
     renderCart();
   });
 
@@ -611,6 +655,8 @@ document.addEventListener("DOMContentLoaded", function() {
 
   // Finish checkout: send sale to server
   window.finishCheckout = async function() {
+    renderCart(); // make sure UI totals are up to date
+
     const totalStr = document.getElementById('total').innerText.replace('₱','') || '0';
     const total = parseFloat(totalStr);
     const cash = parseFloat((document.getElementById('cashInput').value || '0')) || 0;
@@ -623,12 +669,20 @@ document.addEventListener("DOMContentLoaded", function() {
     const customerName = (customerNameEl.value || '').trim() || 'Walk-in';
     const selectedDocType = 'Invoice';
     const saleIsVatable = saleIsVatableEl.checked;
-    const discountPercentOrValue = {
-      type: discountTypeEl.value,
-      value: parseFloat(discountValueEl.value || 0) || 0
-    };
 
-    // Build payload: include items and UI-calculated discount for easy server use.
+    let discountPayload;
+    if (isScPwdDiscount) {
+        discountPayload = {
+            type: 'sc_pwd',
+            input_value: 20
+        };
+    } else {
+        discountPayload = {
+            type: discountTypeEl.value,
+            input_value: parseFloat(discountValueEl.value || 0) || 0
+        };
+    }
+    
     const subtotal = parseFloat(subtotalText.innerText.replace('₱','')) || 0;
     const discountValue = parseFloat(discountText.innerText.replace('₱','')) || 0;
     const vatValue = parseFloat(vatText.innerText.replace('₱','')) || 0;
@@ -637,11 +691,7 @@ document.addEventListener("DOMContentLoaded", function() {
       items: cart,
       doc_type: selectedDocType,
       is_vatable: saleIsVatable,
-      discount: {
-        type: discountPercentOrValue.type,
-        input_value: discountPercentOrValue.value,
-        resolved_value: discountValue
-      },
+      discount: discountPayload,
       totals: {
         subtotal: subtotal,
         discount: discountValue,
@@ -665,17 +715,75 @@ document.addEventListener("DOMContentLoaded", function() {
         const change = cash - total;
         lastReceiptId = data.receipt_number || data.sale_id || null;
 
-        // Prefer server-returned totals when available
-        const receiptTotal = (data.total || total);
-        const receiptVat = (data.vat !== undefined ? data.vat : vatValue);
-        const receiptDiscount = (data.discount_value !== undefined ? data.discount_value : discountValue);
+        // Normalize server fields
+        const serverTotal = Number(data.total);
+        const serverVat = Number(data.vat);
+        const serverDiscount = Number(data.discount_value);
+        const serverVatable = Number(data.vatable_sales);
 
-        const receipt = generateReceipt(cart, subtotal, receiptDiscount, receiptVat, receiptTotal, cash, change, lastReceiptId, customerName);
+        // compute cartGross locally (gross prices as shown in UI)
+        const cartGross = cart.reduce((s,i) => s + (Number(i.price) || 0) * (i.qty || 0), 0);
+        const VAT_RATE = {{ (config.VAT_RATE) }};
+
+        // Prepare final receipt numbers (prefer server values when sane; otherwise compute sensible fallbacks)
+        let receiptTotal, receiptVat, receiptDiscount, receiptVatableSales, receiptSubtotal;
+
+        if (Number.isFinite(serverTotal) && serverTotal > 0) {
+          // Server gave us a sensible total - trust it, fill in other fields with fallbacks
+          receiptTotal = serverTotal;
+          receiptVat = Number.isFinite(serverVat) ? serverVat : 0;
+          receiptDiscount = Number.isFinite(serverDiscount) ? serverDiscount : 0;
+
+          // If server provided vatable sales, use it. Otherwise compute pre-discount subtotal as:
+          receiptSubtotal = receiptTotal + receiptDiscount - receiptVat;
+          if (Number.isFinite(serverVatable)) {
+            receiptVatableSales = serverVatable;
+          } else {
+            receiptVatableSales = receiptSubtotal - receiptVat;
+          }
+        } else {
+          // Server total missing or zero -> compute locally to avoid negative/wrong figures
+          if (data.discount && data.discount.type === 'sc_pwd') {
+            // SC/PWD calculation: discount is 20% of net base, VAT is 0
+            const netBase = round2(cartGross / (1 + VAT_RATE));
+            receiptDiscount = round2(netBase * 0.20);
+            receiptVat = 0;
+            receiptTotal = round2(netBase - receiptDiscount);
+            receiptVatableSales = receiptTotal;
+            receiptSubtotal = netBase;
+          } else {
+            // Standard fallback: use cart gross and client-side discount computation (or server discount if provided)
+            receiptDiscount = Number.isFinite(serverDiscount) && serverDiscount > 0 ? serverDiscount : computeDiscount(cartGross);
+            const discountedGross = round2(cartGross - receiptDiscount);
+            receiptTotal = round2(discountedGross);
+            if (saleIsVatable) {
+              receiptVat = round2(discountedGross * (VAT_RATE / (1 + VAT_RATE)));
+              receiptVatableSales = round2(discountedGross - receiptVat);
+            } else {
+              receiptVat = 0;
+              receiptVatableSales = receiptTotal;
+            }
+            receiptSubtotal = round2(cartGross);
+          }
+        }
+
+        // Ensure numeric safety
+        receiptTotal = Number(receiptTotal) || 0;
+        receiptVat = Number(receiptVat) || 0;
+        receiptDiscount = Number(receiptDiscount) || 0;
+        receiptVatableSales = Number(receiptVatableSales) || 0;
+        receiptSubtotal = Number(receiptSubtotal) || (receiptTotal + receiptDiscount - receiptVat);
+
+        const receipt = generateReceipt(cart, receiptSubtotal, receiptDiscount, receiptVat, receiptTotal, cash, change, lastReceiptId, customerName);
         document.getElementById('receiptTemplate').innerHTML = receipt;
         new bootstrap.Modal(document.getElementById('receiptModal')).show();
 
         updateStockOnPage(cart);
+        // clear cart AFTER reading it for stock updates
         cart = [];
+        isScPwdDiscount = false;
+        discountValueEl.value = '0';
+        
         renderCart();
         document.getElementById('cashInput').value = '';
         bootstrap.Modal.getInstance(calcModalEl).hide();
@@ -709,14 +817,43 @@ document.addEventListener("DOMContentLoaded", function() {
 
   window.currentUserName = {{ (current_user_name or '')|tojson }};
 
-
   // Generate a printable receipt (HTML)
   function generateReceipt(cart, subtotal, discountValue, vatAmount, total, cash, change, receiptNumber, customerName) {
+    // Prefer the values currently shown in the UI so the receipt matches checkout.
+    function readMoneyFromEl(id, fallback) {
+      try {
+        const el = document.getElementById(id);
+        if (el && el.innerText) {
+          // strip non-numeric characters (including the currency symbol) and parse
+          const v = parseFloat(el.innerText.replace(/[^0-9\.\-]/g, ''));
+          if (!isNaN(v)) return v;
+        }
+      } catch (e) {
+        // ignore and fallback
+      }
+      return (Number(fallback) || 0);
+    }
+
+    // Use UI-displayed totals when available (this keeps receipt consistent with checkout)
+    const uiTotal = readMoneyFromEl('total', total);
+    const uiDiscount = readMoneyFromEl('discountText', discountValue);
+    const uiVat = readMoneyFromEl('vatText', vatAmount);
+    const uiVatable = readMoneyFromEl('vatableText', subtotal); // vatable sales shown in UI
+    // Compute pre-discount subtotal for display purposes (Total + Discount)
+    const preDiscountTotal = round2(uiTotal + uiDiscount);
+
+    // Ensure numeric safety
+    const receiptSubtotal = Number(preDiscountTotal) || 0; // Pre-discount gross-like number
+    const receiptDiscount = Number(uiDiscount) || 0;
+    const receiptVat = Number(uiVat) || 0;
+    const receiptTotal = Number(uiTotal) || 0;
+    const receiptCash = Number(cash) || 0;
+    const receiptChange = Number(change) || 0;
+
     const now = new Date();
     const dateStr = now.toLocaleDateString();
     const timeStr = now.toLocaleTimeString();
 
-    // Ensure we have a safe cashier name string
     const cashierName = String(window.currentUserName || '');
 
     let html = `<div class="receipt-header"><h5>${receiptNumber || 'INVOICE'}</h5><small>${dateStr} ${timeStr}</small></div><hr/>`;
@@ -727,18 +864,21 @@ document.addEventListener("DOMContentLoaded", function() {
 
     html += `<div class="receipt-items-header"><span style="flex:1;">Item</span><span style="width:70px;text-align:right;">Qty</span><span style="width:90px;text-align:right;">Total</span></div>`;
     cart.forEach(i => {
-      const lineTotal = (i.price * i.qty).toFixed(2);
+      const lineTotal = ((Number(i.price) || 0) * (i.qty || 0)).toFixed(2);
       html += `<div class="receipt-item"><span style="flex:1;">${escapeHtml(i.name)}</span><span style="width:70px;text-align:right;">${i.qty} ×</span><span style="width:90px;text-align:right;">₱${lineTotal}</span></div>`;
     });
 
     html += `<hr/>`;
     html += `<div class="receipt-totals">`;
-    html += `<div><span>Subtotal:</span><span>₱${(subtotal).toFixed(2)}</span></div>`;
-    html += `<div><span>Discount:</span><span>₱${(discountValue).toFixed(2)}</span></div>`;
-    html += `<div><span>VAT:</span><span>₱${(vatAmount).toFixed(2)}</span></div>`;
-    html += `<div style="font-weight:700"><span>TOTAL:</span><span>₱${(total).toFixed(2)}</span></div>`;
-    html += `<div><span>CASH:</span><span>₱${(cash).toFixed(2)}</span></div>`;
-    html += `<div><span>CHANGE:</span><span>₱${(change).toFixed(2)}</span></div>`;
+    // VATable Sales: use uiVatable if it's available/valid; otherwise derive from preDiscountTotal - vat
+    const vatableDisplay = (Number(uiVatable) || 0) || round2(receiptSubtotal - receiptVat);
+    html += `<div><span>VATable Sales:</span><span>₱${(vatableDisplay).toFixed(2)}</span></div>`;
+    html += `<div><span>VAT:</span><span>₱${(receiptVat).toFixed(2)}</span></div>`;
+    html += `<div><span>Discount:</span><span>(₱${(receiptDiscount).toFixed(2)})</span></div>`;
+    html += `<div style="font-weight:700"><span>TOTAL:</span><span>₱${(receiptTotal).toFixed(2)}</span></div>`;
+    html += `<hr/>`;
+    html += `<div><span>CASH:</span><span>₱${(receiptCash).toFixed(2)}</span></div>`;
+    html += `<div><span>CHANGE:</span><span>₱${(receiptChange).toFixed(2)}</span></div>`;
     html += `</div><hr/>`;
 
     html += `<div class="receipt-field"><strong>Signature:</strong><span></span></div>`;
@@ -779,13 +919,19 @@ document.addEventListener("DOMContentLoaded", function() {
     printWindow.focus();
     setTimeout(() => { printWindow.print(); printWindow.close(); }, 250);
   });
+  
+  scPwdButton.addEventListener('click', () => {
+    isScPwdDiscount = !isScPwdDiscount;
+    if (isScPwdDiscount) {
+        discountValueEl.value = '0';
+    }
+    renderCart();
+  });
 
-  // Recompute totals whenever discounts or VAT toggle change
   discountTypeEl.addEventListener('change', renderCart);
   discountValueEl.addEventListener('input', renderCart);
   saleIsVatableEl.addEventListener('change', renderCart);
 
-  // Initialize render
   renderCart();
 
 });
