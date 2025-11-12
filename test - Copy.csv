@@ -1,4 +1,3 @@
-﻿name,quantity,sale_price
-Leo tires,10,1000
-Air Filter Element,15,150
-Clutch Cable,20,80
+﻿name,sale_price,cost_price,quantity
+House t-shirt,350,200,10
+Bag of rice,500,450,15
