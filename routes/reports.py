@@ -4,7 +4,7 @@ from flask_login import login_required
 from models import db, JournalEntry, Account, Sale, Purchase, Product, ARInvoice, APInvoice, CompanyProfile, Customer, Supplier, CreditMemo, Payment, SaleItem, PurchaseItem, StockAdjustment
 from collections import defaultdict
 import json
-from sqlalchemy import func, extract, cast, Date
+from sqlalchemy import func, extract, cast, Date, or_, and_
 from datetime import datetime, date, timedelta
 from routes.decorators import role_required
 import io
@@ -236,99 +236,114 @@ def income_statement():
 @login_required
 @role_required('Admin', 'Accountant')
 def vat_report():
-    start_date_str = request.args.get('start_date')
-    end_date_str = request.args.get('end_date')
+    # --- Get dates from URL ---
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
 
     start_date = parse_date(start_date_str)
     end_date = parse_date(end_date_str)
 
-    # Prepare base queries for each source
-    sale_query = Sale.query
-    ar_invoice_query = ARInvoice.query
-    purchase_query = Purchase.query
-    ap_invoice_query = APInvoice.query
+    # --- OUTPUT VAT ---
+    output_vat_query = db.session.query(
+        func.sum(Sale.vat)
+    ).filter(
+        Sale.is_vatable == True,
+        Sale.voided_at == None
+    )
+    
+    # --- INPUT VAT ---
+    input_vat_query = db.session.query(
+        func.sum(Purchase.vat)
+    ).filter(
+        Purchase.is_vatable == True,
+        Purchase.voided_at == None
+    )
 
-    # Make end_date inclusive for datetime comparisons
-    end_date_inclusive = None
-    if end_date:
-        end_date_inclusive = end_date + timedelta(days=1)
+    # --- NON-VAT SALES ---
+    # Query for sales that are (is_vatable=False) OR (is_vatable=True AND vat=0)
+    non_vat_sales_query = db.session.query(
+        func.sum(Sale.total)
+    ).filter(
+        or_(
+            Sale.is_vatable == False,
+            and_(
+                Sale.is_vatable == True,
+                Sale.vat == 0.00
+            )
+        ),
+        Sale.voided_at == None
+    )
 
-    # Apply date filters where appropriate
+    # --- NON-VAT AR INVOICES ---
+    non_vat_ar_query = db.session.query(
+        func.sum(ARInvoice.total)
+    ).filter(
+        or_(
+            ARInvoice.is_vatable == False,
+            and_(
+                ARInvoice.is_vatable == True,
+                ARInvoice.vat == 0.00
+            )
+        ),
+        ARInvoice.voided_at == None
+    )
+
+    # --- NON-VAT PURCHASES ---
+    non_vat_purchases_query = db.session.query(
+        func.sum(Purchase.total)
+    ).filter(
+        Purchase.is_vatable == False,
+        Purchase.voided_at == None
+    )
+
+    # --- NON-VAT AP INVOICES ---
+    non_vat_ap_query = db.session.query(
+        func.sum(APInvoice.total)
+    ).filter(
+        APInvoice.is_vatable == False,
+        APInvoice.voided_at == None
+    )
+
+    # Apply date filters
     if start_date:
-        sale_query = sale_query.filter(Sale.created_at >= start_date)
-        ar_invoice_query = ar_invoice_query.filter(ARInvoice.date >= start_date)
-        purchase_query = purchase_query.filter(Purchase.created_at >= start_date)
-        ap_invoice_query = ap_invoice_query.filter(APInvoice.date >= start_date)
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        output_vat_query = output_vat_query.filter(Sale.created_at >= start_datetime)
+        input_vat_query = input_vat_query.filter(Purchase.created_at >= start_datetime)
+        non_vat_sales_query = non_vat_sales_query.filter(Sale.created_at >= start_datetime)
+        non_vat_ar_query = non_vat_ar_query.filter(ARInvoice.created_at >= start_datetime)
+        non_vat_purchases_query = non_vat_purchases_query.filter(Purchase.created_at >= start_datetime)
+        non_vat_ap_query = non_vat_ap_query.filter(APInvoice.created_at >= start_datetime)
 
-    if end_date_inclusive:
-        sale_query = sale_query.filter(Sale.created_at < end_date_inclusive)
-        ar_invoice_query = ar_invoice_query.filter(ARInvoice.date < end_date_inclusive)
-        purchase_query = purchase_query.filter(Purchase.created_at < end_date_inclusive)
-        ap_invoice_query = ap_invoice_query.filter(APInvoice.date < end_date_inclusive)
+    if end_date:
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        output_vat_query = output_vat_query.filter(Sale.created_at <= end_datetime)
+        input_vat_query = input_vat_query.filter(Purchase.created_at <= end_datetime)
+        non_vat_sales_query = non_vat_sales_query.filter(Sale.created_at <= end_datetime)
+        non_vat_ar_query = non_vat_ar_query.filter(ARInvoice.created_at <= end_datetime)
+        non_vat_purchases_query = non_vat_purchases_query.filter(Purchase.created_at <= end_datetime)
+        non_vat_ap_query = non_vat_ap_query.filter(APInvoice.created_at <= end_datetime)
 
-    # --- NON-VAT AWARE SUMS (use DB aggregates for performance) ---
-    # Vatable cash sales VAT
-    sales_vat = float(
-        sale_query.filter(Sale.is_vatable == True)
-        .with_entities(func.coalesce(func.sum(Sale.vat), 0))
-        .scalar() or 0
-    )
-    # Vatable AR invoices VAT
-    ar_invoice_vat = float(
-        ar_invoice_query.filter(ARInvoice.vat != None, ARInvoice.vat > 0)
-        .with_entities(func.coalesce(func.sum(ARInvoice.vat), 0))
-        .scalar() or 0
-    )
-    total_output_vat = sales_vat + ar_invoice_vat
+    # Execute all queries
+    total_output_vat = output_vat_query.scalar() or 0.0
+    total_input_vat = input_vat_query.scalar() or 0.0
+    total_non_vat_sales = non_vat_sales_query.scalar() or 0.0
+    total_non_vat_ar = non_vat_ar_query.scalar() or 0.0
+    total_non_vat_purchases = non_vat_purchases_query.scalar() or 0.0
+    total_non_vat_ap = non_vat_ap_query.scalar() or 0.0
 
-    # Non-VAT Sales totals (cash + AR)
-    nonvat_sales_total = float(
-        sale_query.filter((Sale.is_vatable == False) | (Sale.is_vatable == None))
-        .with_entities(func.coalesce(func.sum(Sale.total), 0))
-        .scalar() or 0
-    )
-    nonvat_ar_total = float(
-        ar_invoice_query.filter((ARInvoice.vat == 0) | (ARInvoice.vat == None))
-        .with_entities(func.coalesce(func.sum(ARInvoice.total), 0))
-        .scalar() or 0
-    )
-    total_nonvat_sales = nonvat_sales_total + nonvat_ar_total
-
-    # Vatable purchases VAT
-    purchases_vat = float(
-        purchase_query.filter(Purchase.is_vatable == True)
-        .with_entities(func.coalesce(func.sum(Purchase.vat), 0))
-        .scalar() or 0
-    )
-    ap_invoice_vat = float(
-        ap_invoice_query.filter(APInvoice.vat != None, APInvoice.vat > 0)
-        .with_entities(func.coalesce(func.sum(APInvoice.vat), 0))
-        .scalar() or 0
-    )
-    total_input_vat = purchases_vat + ap_invoice_vat
-
-    # Non-VAT Purchases totals (cash + AP)
-    nonvat_purchases_total = float(
-        purchase_query.filter((Purchase.is_vatable == False) | (Purchase.is_vatable == None))
-        .with_entities(func.coalesce(func.sum(Purchase.total), 0))
-        .scalar() or 0
-    )
-    nonvat_ap_total = float(
-        ap_invoice_query.filter((APInvoice.vat == 0) | (APInvoice.vat == None))
-        .with_entities(func.coalesce(func.sum(APInvoice.total), 0))
-        .scalar() or 0
-    )
-    total_nonvat_purchases = nonvat_purchases_total + nonvat_ap_total
-
+    # Combine totals
     vat_payable = total_output_vat - total_input_vat
+    total_non_vat_sales_combined = total_non_vat_sales + total_non_vat_ar
+    total_non_vat_purchases_combined = total_non_vat_purchases + total_non_vat_ap
 
+    # ✅ FIX: The variable names here now match vat_report.html
     return render_template(
         'vat_report.html',
         total_output_vat=total_output_vat,
         total_input_vat=total_input_vat,
         vat_payable=vat_payable,
-        total_nonvat_sales=total_nonvat_sales,
-        total_nonvat_purchases=total_nonvat_purchases,
+        total_nonvat_sales=total_non_vat_sales_combined,  # <--- No underscore
+        total_nonvat_purchases=total_non_vat_purchases_combined, # <--- No underscore
         start_date=start_date_str,
         end_date=end_date_str
     )

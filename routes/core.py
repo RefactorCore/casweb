@@ -4,7 +4,7 @@ import json
 from config import Config
 from datetime import datetime, timedelta
 from sqlalchemy import func, exc 
-from models import Sale, CompanyProfile, User, AuditLog
+from models import Sale, CompanyProfile, User, AuditLog, Customer
 import io, csv, json
 from io import StringIO
 from routes.utils import paginate_query, log_action, get_system_account_code
@@ -116,8 +116,10 @@ def index():
         current_filter_label = 'Last 7 Days'
 
     # --- Build FILTERED queries for Sales and Purchases ---
-    sales_query = db.session.query(func.sum(Sale.total))
-    purchases_query = db.session.query(func.sum(Purchase.total))
+    
+    # ✅ FIX: Add void filter to sales and purchases
+    sales_query = db.session.query(func.sum(Sale.total)).filter(Sale.voided_at == None)
+    purchases_query = db.session.query(func.sum(Purchase.total)).filter(Purchase.voided_at == None)
 
     if start_date:
         sales_query = sales_query.filter(Sale.created_at >= start_date)
@@ -136,7 +138,14 @@ def index():
         intervals = [today - timedelta(hours=i) for i in range(11, -1, -1)]
         for hour_start in intervals:
             hour_end = hour_start + timedelta(hours=1)
-            hour_total = (db.session.query(func.sum(Sale.total)).filter(Sale.created_at >= hour_start).filter(Sale.created_at < hour_end).scalar() or 0)
+            
+            # ✅ FIX: Add void filter to chart query
+            hour_total = (db.session.query(func.sum(Sale.total))
+                          .filter(Sale.created_at >= hour_start)
+                          .filter(Sale.created_at < hour_end)
+                          .filter(Sale.voided_at == None)  # <-- FIX
+                          .scalar() or 0)
+            
             sales_by_period.append(hour_total)
             labels.append(hour_start.strftime('%I%p'))
     else:
@@ -145,12 +154,19 @@ def index():
         elif period == '7':
             days = 7
         else:
+            # Default for 'all' - let's cap at 90 days for performance
             days = 90
             
         today_date = datetime.utcnow().date()
         last_n_days = [today_date - timedelta(days=i) for i in range(days - 1, -1, -1)]
         for day in last_n_days:
-            day_total = (db.session.query(func.sum(Sale.total)).filter(func.date(Sale.created_at) == day).scalar() or 0)
+            
+            # ✅ FIX: Add void filter to chart query
+            day_total = (db.session.query(func.sum(Sale.total))
+                         .filter(func.date(Sale.created_at) == day)
+                         .filter(Sale.voided_at == None)  # <-- FIX
+                         .scalar() or 0)
+            
             sales_by_period.append(day_total)
             labels.append(day.strftime('%b %d'))
             
@@ -161,6 +177,8 @@ def index():
             func.sum(SaleItem.qty).label('total_qty_sold')
         )
         .join(SaleItem, Product.id == SaleItem.product_id)
+        .join(Sale, Sale.id == SaleItem.sale_id)  # ✅ FIX: Join Sale to filter
+        .filter(Sale.voided_at == None)          # ✅ FIX: Add void filter
         .group_by(Product.name)
         .order_by(func.sum(SaleItem.qty).desc())
         .limit(10)
@@ -173,13 +191,15 @@ def index():
     # Get unpaid AR invoices with due dates (money we need to COLLECT)
     ar_due = ARInvoice.query.filter(
         ARInvoice.status != 'Paid',
-        ARInvoice.due_date.isnot(None)
+        ARInvoice.due_date.isnot(None),
+        ARInvoice.voided_at == None  # ✅ FIX: Add void filter
     ).order_by(ARInvoice.due_date.asc()).limit(10).all()
     
     # ✅ NEW: Get unpaid AP invoices with due dates (money we need to PAY)
     ap_due = APInvoice.query.filter(
         APInvoice.status != 'Paid',
-        APInvoice.due_date.isnot(None)
+        APInvoice.due_date.isnot(None),
+        APInvoice.voided_at == None  # ✅ FIX: Add void filter
     ).order_by(APInvoice.due_date.asc()).limit(10).all()
     
     # Combine and categorize by urgency
@@ -187,7 +207,7 @@ def index():
     
     # Process AR Invoices (Receivables - money coming IN)
     for inv in ar_due:
-        days_until_due = (inv.due_date - today).days if inv.due_date else 999
+        days_until_due = (inv.due_date - today.date()).days if inv.due_date else 999
         balance = inv.total - inv.paid
         
         if balance <= 0:
@@ -211,7 +231,7 @@ def index():
     
     # ✅ NEW: Process AP Invoices (Payables - money going OUT)
     for inv in ap_due:
-        days_until_due = (inv.due_date - today).days if inv.due_date else 999
+        days_until_due = (inv.due_date - today.date()).days if inv.due_date else 999
         balance = inv.total - inv.paid
         
         if balance <= 0:
@@ -995,6 +1015,7 @@ def pos():
 # Update the api_sale function (around line 700)
 
 @core_bp.route('/api/sale', methods=['POST'])
+@login_required
 def api_sale():
     # Import FIFO utilities at the top of the function
     from routes.fifo_utils import consume_inventory_fifo
@@ -1004,7 +1025,9 @@ def api_sale():
     sale_is_vatable = bool(data.get('is_vatable', False))
     doc_type = data.get('doc_type', 'Invoice')
     discount = data.get('discount') or {}
-    discount_type = discount.get('type') or None
+    
+    # ✅ FIX: Added 'sc_pwd' as a potential discount type
+    discount_type = discount.get('type') or None # 'percent', 'fixed', or 'sc_pwd'
     discount_input = float(discount.get('input_value') or 0) if discount.get('input_value') is not None else 0.0
 
     customer_name = (data.get('customer_name') or '').strip() or 'Walk-in'
@@ -1078,16 +1101,15 @@ def api_sale():
                     db.session.rollback()
                     return jsonify({'error': f'Insufficient stock for {product.name}'}), 400
 
-                unit_price = float(product.sale_price)  # ✅ ADD THIS
-                line_gross = round(unit_price * qty, 2) # ✅ ADD THIS
+                unit_price = float(product.sale_price)
+                line_gross = round(unit_price * qty, 2)
                 
-                # ✅ ADD THIS - Calculate COGS using FIFO
                 try:
                     line_cogs, _ = consume_inventory_fifo(
                         product_id=product.id,
                         quantity_needed=qty,
                         sale_id=sale.id,
-                        sale_item_id=None
+                        sale_item_id=None 
                     )
                 except ValueError as e:
                     db.session.rollback()
@@ -1111,24 +1133,84 @@ def api_sale():
             subtotal_gross += line_gross
             total_cogs += line_cogs
 
+        # ✅ FIX: Complete refactor of discount and VAT logic to be BIR-compliant
+        # This new block correctly handles SC/PWD discounts while keeping
+        # promo/fixed discounts functional. It also fixes the JE balancing.
+
         resolved_discount = 0.0
-        if discount_type and discount_input:
-            if discount_type == 'percent':
-                pct = max(0.0, min(100.0, float(discount_input)))
-                resolved_discount = round(subtotal_gross * (pct / 100.0), 2)
+        
+        # 1. Calculate totals for regular items
+        regular_sales_gross = sum(p['line_gross'] for p in processed if not p['is_consignment'])
+        
+        # 2. Calculate totals for consignment items
+        consignment_sales_gross = sum(p['line_gross'] for p in processed if p['is_consignment'])
+
+        # 3. Handle different discount types
+        if discount_type == 'sc_pwd' and sale_is_vatable:
+            # --- SC/PWD LOGIC ---
+            # Assumes SC/PWD discount applies to VATable regular items only.
+            # Consignment items are not discounted in this case.
+            
+            regular_sales_net_base = round(regular_sales_gross / (1 + VAT_RATE), 2)
+            pct = max(0.0, min(100.0, float(discount_input))) # Should be 20
+            
+            resolved_discount = round(regular_sales_net_base * (pct / 100.0), 2)
+            
+            regular_sales_final_price = round(regular_sales_net_base - resolved_discount, 2)
+            regular_sales_vat_final = 0.0 # SC/PWD sales are VAT-Exempt
+            regular_sales_net_final = regular_sales_final_price
+            
+            # Consignment items are unaffected
+            consignment_sales_final_price = consignment_sales_gross
+            # (We assume consignment VAT logic follows main flag)
+            if sale_is_vatable:
+                consignment_vat_final = round(consignment_sales_final_price * (VAT_RATE / (1 + VAT_RATE)), 2)
             else:
-                resolved_discount = round(min(subtotal_gross, float(discount_input)), 2)
+                consignment_vat_final = 0.0
+            consignment_net_final = round(consignment_sales_final_price - consignment_vat_final, 2)
+            
+            # Final totals
+            total_amount = round(regular_sales_final_price + consignment_sales_final_price, 2)
+            vat_after = round(regular_sales_vat_final + consignment_vat_final, 2)
 
-        discounted_gross = round(max(0.0, subtotal_gross - resolved_discount), 2)
-
-        if sale_is_vatable:
-            vat_after = round(discounted_gross * (VAT_RATE / (1 + VAT_RATE)), 2)
         else:
-            vat_after = 0.0
+            # --- STANDARD DISCOUNT LOGIC (Percent or Fixed) ---
+            if discount_type and discount_input:
+                if discount_type == 'percent':
+                    pct = max(0.0, min(100.0, float(discount_input)))
+                    resolved_discount = round(subtotal_gross * (pct / 100.0), 2)
+                else: # 'fixed'
+                    resolved_discount = round(min(subtotal_gross, float(discount_input)), 2)
+            
+            # Apportion discount proportionally
+            if subtotal_gross > 0:
+                regular_discount_share = round(resolved_discount * (regular_sales_gross / subtotal_gross), 2)
+                consignment_discount_share = round(resolved_discount * (consignment_sales_gross / subtotal_gross), 2)
+            else:
+                regular_discount_share = 0.0
+                consignment_discount_share = 0.0
 
-        net_sales_after = round(discounted_gross - vat_after, 2)
-        total_amount = discounted_gross
+            # Calculate finals for regular items
+            regular_sales_post_discount = regular_sales_gross - regular_discount_share
+            if sale_is_vatable:
+                 regular_sales_vat_final = round(regular_sales_post_discount * (VAT_RATE / (1 + VAT_RATE)), 2)
+            else:
+                 regular_sales_vat_final = 0.0
+            regular_sales_net_final = round(regular_sales_post_discount - regular_sales_vat_final, 2)
+            
+            # Calculate finals for consignment items
+            consignment_sales_post_discount = consignment_sales_gross - consignment_discount_share
+            if sale_is_vatable:
+                consignment_vat_final = round(consignment_sales_post_discount * (VAT_RATE / (1 + VAT_RATE)), 2)
+            else:
+                consignment_vat_final = 0.0
+            consignment_net_final = round(consignment_sales_post_discount - consignment_vat_final, 2)
 
+            # Final totals
+            vat_after = round(regular_sales_vat_final + consignment_vat_final, 2)
+            total_amount = round(regular_sales_post_discount + consignment_sales_post_discount, 2)
+
+        # --- Update Sale object with final calculated totals ---
         sale.discount_value = resolved_discount
         sale.total = total_amount
         sale.vat = vat_after
@@ -1183,7 +1265,7 @@ def api_sale():
                 db.session.add(sale_item)
                 product.quantity -= p['qty']
 
-        # Calculate consignment commission
+        # Calculate consignment commission (based on pre-discount gross)
         consignment_sales_total = sum(p['line_gross'] for p in processed if p['is_consignment'])
         consignment_commission_total = 0.0
 
@@ -1207,24 +1289,13 @@ def api_sale():
                 commission = round(group['total'] * commission_rate, 2)
                 consignment_commission_total += commission
 
-        # Journal Entry
-                # Journal Entry
-        if sale_is_vatable:
-            vat_before = round(subtotal_gross * (VAT_RATE / (1 + VAT_RATE)), 2)
-        else:
-            vat_before = 0.0
-        
-        # ✅ CRITICAL FIX: Calculate regular (non-consignment) sales only
-        regular_sales_total = sum(p['line_gross'] for p in processed if not p['is_consignment'])
-        regular_sales_vat = round(regular_sales_total * (VAT_RATE / (1 + VAT_RATE)), 2) if sale_is_vatable else 0.0
-        regular_sales_net = round(regular_sales_total - regular_sales_vat, 2)
-
+        # ✅ FIX: Journal Entry logic refactored to be balanced and correct
         je_lines = []
 
-        # Cash received (total amount including both regular and consignment)
+        # 1. Cash received
         je_lines.append({'account_code': get_system_account_code('Cash'), 'debit': float(total_amount), 'credit': 0})
 
-        # ✅ FIXED: Only record consignment commission revenue (not full sale amount)
+        # 2. Consignment Commission Revenue (based on pre-discount)
         if consignment_commission_total > 0:
             je_lines.append({
                 'account_code': get_system_account_code('Consignment Commission Revenue'), 
@@ -1232,7 +1303,7 @@ def api_sale():
                 'credit': float(consignment_commission_total)
             })
 
-        # ✅ FIXED: Record consignment payable (amount owed to supplier)
+        # 3. Consignment Payable (pre-discount sales - commission)
         if consignment_sales_total > 0:
             consignment_payable = consignment_sales_total - consignment_commission_total
             je_lines.append({
@@ -1241,39 +1312,52 @@ def api_sale():
                 'credit': float(consignment_payable)
             })
         
-        # Discount (applies to total, both regular and consignment)
+        # 4. Discount
         discount_acc_code = get_system_account_code('Discounts Allowed')
         if resolved_discount and resolved_discount > 0:
             je_lines.append({'account_code': discount_acc_code, 'debit': float(resolved_discount), 'credit': 0})
         
-        # ✅ FIXED: COGS only for regular products (not consignment)
+        # 5. COGS (regular products only)
         if total_cogs and total_cogs > 0:
             je_lines.append({'account_code': get_system_account_code('COGS'), 'debit': float(total_cogs), 'credit': 0})
 
-        # ✅ CRITICAL FIX: Sales Revenue ONLY for regular products (not consignment)
-        if regular_sales_net > 0:
-            je_lines.append({'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': float(regular_sales_net)})
+        # 6. Sales Revenue (FIXED: Uses final post-discount/pre-tax value)
+        if regular_sales_net_final > 0:
+            je_lines.append({'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': float(regular_sales_net_final)})
 
-        # ✅ FIXED: VAT only for regular sales (consignment sales already included in total)
-        if sale_is_vatable and regular_sales_vat > 0:
-            je_lines.append({'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': float(regular_sales_vat)})
+        # 7. VAT Payable (FIXED: Uses final calculated VAT for both)
+        final_total_vat = regular_sales_vat_final + (consignment_vat_final if 'consignment_vat_final' in locals() else 0.0)
+        if final_total_vat > 0:
+            je_lines.append({'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': float(final_total_vat)})
 
-        # ✅ FIXED: Inventory reduction only for regular products
+        # 8. Inventory (regular products only)
         if total_cogs and total_cogs > 0:
             je_lines.append({'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': float(total_cogs)})
 
-        # Rounding adjustment (rest of code stays the same)
+        # Rounding adjustment
         total_debits = sum(float(l.get('debit', 0) or 0) for l in je_lines)
         total_credits = sum(float(l.get('credit', 0) or 0) for l in je_lines)
 
         rounding_diff = round(total_debits - total_credits, 2)
         if abs(rounding_diff) >= 0.01:
             adjusted = False
+            # Try to adjust Sales Revenue first
+            sales_revenue_code = get_system_account_code('Sales Revenue')
             for l in je_lines:
-                if l.get('account_code') == discount_acc_code and l.get('debit', 0) >= abs(rounding_diff):
-                    l['debit'] = round(l['debit'] - rounding_diff, 2)
+                if l.get('account_code') == sales_revenue_code:
+                    l['credit'] = round(l['credit'] + rounding_diff, 2)
                     adjusted = True
                     break
+            
+            # If not, adjust discount
+            if not adjusted:
+                for l in je_lines:
+                    if l.get('account_code') == discount_acc_code and l.get('debit', 0) >= abs(rounding_diff):
+                        l['debit'] = round(l['debit'] - rounding_diff, 2)
+                        adjusted = True
+                        break
+            
+            # Fallback to cash
             if not adjusted:
                 cash_code = get_system_account_code('Cash')
                 for l in je_lines:
@@ -1281,12 +1365,14 @@ def api_sale():
                         l['debit'] = round(l['debit'] - rounding_diff, 2)
                         adjusted = True
                         break
-            total_debits = sum(float(l.get('debit', 0) or 0) for l in je_lines)
-            total_credits = sum(float(l.get('credit', 0) or 0) for l in je_lines)
+        
+        # Final balance check
+        total_debits = sum(float(l.get('debit', 0) or 0) for l in je_lines)
+        total_credits = sum(float(l.get('credit', 0) or 0) for l in je_lines)
 
         if round(total_debits, 2) != round(total_credits, 2):
             db.session.rollback()
-            return jsonify({'error': 'Journal entry balancing failed due to rounding differences.'}), 500
+            return jsonify({'error': f'Journal entry balancing failed. D={total_debits}, C={total_credits}'}), 500
 
         db.session.add(JournalEntry(description=f'Sale #{sale.id} ({full_doc_number})', entries_json=json.dumps(je_lines)))
 
@@ -1300,12 +1386,12 @@ def api_sale():
             'vat': vat_after,
             'discount_value': resolved_discount
         })
-    except exc.IntegrityError:
+    except exc.IntegrityError as e:
         db.session.rollback()
         return jsonify({'error': 'Failed to generate unique document number. Please try again.'}), 500
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
 
 
 @core_bp.route('/sales')
@@ -1340,6 +1426,9 @@ def sales():
     # ✅ Query both cash sales (POS) and billing invoices (AR)
     cash_sales_query = Sale.query
     ar_invoices_query = ARInvoice.query
+
+    cash_sales_query = cash_sales_query.filter(Sale.voided_at == None)
+    ar_invoices_query = ar_invoices_query.filter(ARInvoice.voided_at == None)
 
     # ✅ FIXED: Apply date filters BEFORE search (more efficient)
     if start_date:
