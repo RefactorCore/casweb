@@ -2001,6 +2001,9 @@ def settings():
 @login_required
 @role_required('Admin', 'Accountant')
 def adjust_stock():
+    # --- FIX: Import FIFO utils ---
+    from routes.fifo_utils import create_inventory_lot, consume_inventory_fifo
+
     product_id = int(request.form.get('product_id'))
     quantity = int(request.form.get('quantity'))
     reason = request.form.get('reason')
@@ -2009,6 +2012,10 @@ def adjust_stock():
 
     if not reason:
         flash('A reason for the adjustment is required.', 'danger')
+        return redirect(url_for('core.inventory'))
+    
+    if quantity == 0:
+        flash('Quantity cannot be zero.', 'warning')
         return redirect(url_for('core.inventory'))
 
     try:
@@ -2024,18 +2031,48 @@ def adjust_stock():
             user_id=current_user.id
         )
         db.session.add(adjustment)
+        db.session.flush() # Flush to get adjustment.id
 
-        # 3. Create Journal Entry
+        # 3. Create Journal Entry & Handle FIFO Lots
         adjustment_value = abs(quantity) * product.cost_price
         
         if quantity < 0: # Stock reduction (loss)
             debit_account_code = get_system_account_code('Inventory Loss')
             credit_account_code = get_system_account_code('Inventory')
             desc = f"Stock loss for {product.name}: {reason}"
+            
+            # --- FIX: Consume from FIFO lots ---
+            try:
+                # Use abs(quantity) because consume_inventory_fifo expects a positive number
+                cogs_from_loss, _ = consume_inventory_fifo(
+                    product_id=product.id,
+                    quantity_needed=abs(quantity),
+                    adjustment_id=adjustment.id
+                )
+                # Use the *actual* cost from FIFO for the journal entry
+                adjustment_value = cogs_from_loss
+            except ValueError as e:
+                db.session.rollback()
+                flash(f'Error consuming inventory: {str(e)}', 'danger')
+                return redirect(url_for('core.inventory'))
+            # --- END FIX ---
+
         else: # Stock increase (gain)
             debit_account_code = get_system_account_code('Inventory')
             credit_account_code = get_system_account_code('Inventory Gain')
             desc = f"Stock gain for {product.name}: {reason}"
+
+            # --- FIX: Create new inventory lot ---
+            create_inventory_lot(
+                product_id=product.id,
+                quantity=quantity,
+                unit_cost=product.cost_price, # Use product's current cost_price for gains
+                adjustment_id=adjustment.id,
+                is_opening_balance=False 
+            )
+            # Use the product's cost_price for the journal entry
+            adjustment_value = quantity * product.cost_price
+            # --- END FIX ---
 
         je_lines = [
             {"account_code": debit_account_code, "debit": adjustment_value, "credit": 0},

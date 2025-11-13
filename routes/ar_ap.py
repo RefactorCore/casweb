@@ -339,13 +339,21 @@ def record_payment():
 @login_required
 @role_required('Admin', 'Accountant')
 def credit_memos():
-    # ... (form parsing and validation remains the same) ...
+    # --- FIX: Import new models and utils ---
+    from routes.fifo_utils import create_inventory_lot
+    # Note: Product, ARInvoiceItem are already imported in your file
 
     if request.method == 'POST':
         customer_id = int(request.form.get('customer_id'))
         ar_invoice_id = int(request.form.get('ar_invoice_id') or 0) or None
         reason = request.form.get('reason')
         total_amount = float(request.form.get('total_amount') or 0)
+
+        # --- FIX: Read new (optional) fields for inventory return ---
+        # You must update your HTML form to send these fields
+        return_product_id = int(request.form.get('return_product_id') or 0) or None
+        return_quantity = int(request.form.get('return_quantity') or 0) or None
+        # --- END FIX ---
 
         if not customer_id or total_amount <= 0:
             flash('Customer and a valid amount are required.', 'danger')
@@ -366,31 +374,67 @@ def credit_memos():
         db.session.add(cm)
         db.session.flush()
 
-        # --- REVISED AR INVOICE ADJUSTMENT BLOCK (The Fix) ---
         if ar_invoice_id:
             inv = ARInvoice.query.get(ar_invoice_id)
             if inv:
-                # 1. Apply the Credit Memo amount to the 'paid' field.
-                # This ensures the outstanding balance is correctly reduced.
                 inv.paid += total_amount 
-                
-                # 2. Update the status based on the new 'paid' amount.
                 remaining_balance = inv.total - inv.paid
-                
-                if remaining_balance <= 0:
+                if remaining_balance <= 0.01: # Add tolerance
                     inv.status = 'Paid'
                 elif remaining_balance < inv.total:
                     inv.status = 'Partially Paid'
-                else:
-                    inv.status = 'Open' # Should not happen unless original total was 0
-        # --- END OF FIX ---
 
-        # Journal Entry (This is correct for Sales Returns)
+        # Journal Entry
         je_lines = [
                 {'account_code': get_system_account_code('Sales Returns'), 'debit': amount_net, 'credit': 0},
                 {'account_code': get_system_account_code('VAT Payable'), 'debit': vat, 'credit': 0},
                 {'account_code': get_system_account_code('Accounts Receivable'), 'debit': 0, 'credit': total_amount}
             ]
+        
+        # --- FIX: Add logic to handle inventory return ---
+        if return_product_id and return_quantity:
+            product = Product.query.get(return_product_id)
+            if product:
+                # 1. Add item back to stock
+                product.quantity += return_quantity
+                
+                # 2. Get the item's original cost
+                # We will find the *original* cost from the AR Invoice item
+                # If not found, we'll fall back to the product's current cost_price
+                return_cost = product.cost_price 
+                if ar_invoice_id:
+                    original_item = ARInvoiceItem.query.filter_by(
+                        ar_invoice_id=ar_invoice_id, 
+                        product_id=return_product_id
+                    ).first()
+                    if original_item and original_item.cogs > 0 and original_item.qty > 0:
+                        return_cost = original_item.cogs / original_item.qty
+                
+                # 3. Create a new inventory lot for the returned item
+                create_inventory_lot(
+                    product_id=product.id,
+                    quantity=return_quantity,
+                    unit_cost=return_cost,
+                    is_opening_balance=False
+                )
+                
+                # 4. Add COGS reversal to Journal Entry
+                total_cogs_reversal = round(return_cost * return_quantity, 2)
+                if total_cogs_reversal > 0:
+                    je_lines.append({
+                        'account_code': get_system_account_code('Inventory'), 
+                        'debit': total_cogs_reversal, 
+                        'credit': 0
+                    })
+                    je_lines.append({
+                        'account_code': get_system_account_code('COGS'), 
+                        'debit': 0, 
+                        'credit': total_cogs_reversal
+                    })
+
+                log_action(f'Returned {return_quantity} of {product.name} to inventory via CM #{cm.id}.')
+        # --- END FIX ---
+
         je = JournalEntry(description=f'Credit Memo #{cm.id} for {reason}', entries_json=json.dumps(je_lines))
         db.session.add(je)
         log_action(f'Created Credit Memo #{cm.id} for ₱{cm.total_amount:,.2f} (Reason: {reason}).')
@@ -398,10 +442,19 @@ def credit_memos():
         flash('Credit Memo created successfully.', 'success')
         return redirect(url_for('ar_ap.credit_memos'))
 
+    # GET request logic
     memos = CreditMemo.query.order_by(CreditMemo.date.desc()).all()
     customers = Customer.query.order_by(Customer.name).all()
     invoices = ARInvoice.query.filter(ARInvoice.status != 'Paid').order_by(ARInvoice.id.desc()).all()
-    return render_template('credit_memos.html', memos=memos, customers=customers, invoices=invoices)
+    
+    # --- FIX: Pass products to template for the new dropdown ---
+    products = Product.query.filter_by(is_active=True).order_by(Product.name).all()
+    
+    return render_template('credit_memos.html', 
+                           memos=memos, 
+                           customers=customers, 
+                           invoices=invoices,
+                           products=products) # <-- Pass products
 
 
 # Update the billing_invoices function (around line 354)
