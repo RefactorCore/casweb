@@ -82,7 +82,7 @@
                                 <button class="btn btn-sm btn-primary" 
                                         data-bs-toggle="modal" 
                                         data-bs-target="#recordPaymentModal" 
-                                        onclick="setPaymentDetails('AR', {{ inv.id }}, {{ balance }})">
+                                        onclick="setPaymentDetails('AR', {{ inv.id }}, {{ balance }}, {{ inv.customer.wht_rate_percent or 0 }}, {{ inv.total - inv.vat }})">
                                     <i class="bi bi-cash"></i> Collect
                                 </button>
                                 {% endif %}
@@ -358,12 +358,18 @@
                 <div class="modal-body">
                     <input type="hidden" name="ref_type" id="paymentRefType">
                     <input type="hidden" name="ref_id" id="paymentRefId">
+                    <input type="hidden" id="paymentFullBalance" value="0">
 
                     <div class="mb-3">
-                        <label class="form-label">Amount Paid</label>
-                        <input type="number" step="0.01" name="amount" id="paymentAmount" class="form-control" required>
-                        <div class="form-text">Max balance: <span id="maxBalance"></span></div>
+                        <label class="form-label"><strong>Amount Paid (Cash/Bank)</strong></label>
+                        <input type="number" step="0.01" name="amount" id="paymentAmount" class="form-control" oninput="calculateWHT('amount')" required>
                     </div>
+
+                    <div class="mb-3">
+                        <label class="form-label"><strong>Withholding Tax (Form 2307)</strong></label>
+                        <input type="number" step="0.01" name="wht_amount" id="paymentWHT" class="form-control" oninput="calculateWHT('wht')" value="0" required>
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label">Payment Method</label>
                         <select name="method" class="form-select" required>
@@ -371,6 +377,14 @@
                             <option value="Bank">Bank Transfer/Check</option>
                         </select>
                     </div>
+                    
+                    <div class="alert alert-info">
+                        <div>Full Balance Due: <strong id="maxBalance">₱0.00</strong></div>
+                        <hr class="my-2">
+                        <div class_name="fw-bold">Total Credited: <strong id="totalCredited" class="fs-5">₱0.00</strong></div>
+                        <small id="whtNotice" class="text-muted d-none">WHT rate applied.</small>
+                    </div>
+
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -551,12 +565,83 @@ function calculateTotals() {
     document.getElementById('displayTotal').textContent = '₱' + grandTotal.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-function setPaymentDetails(refType, refId, balance) {
+// ✅ REVISED: setPaymentDetails function
+function setPaymentDetails(refType, refId, balance, wht_rate, vatable_base) {
     document.getElementById('paymentRefType').value = refType;
     document.getElementById('paymentRefId').value = refId;
-    document.getElementById('paymentAmount').value = balance.toFixed(2);
-    document.getElementById('paymentAmount').max = balance.toFixed(2);
-    document.getElementById('maxBalance').innerText = '₱' + balance.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    
+    let fullBalance = parseFloat(balance);
+    let whtAmount = 0;
+    let amountPaid = fullBalance;
+    
+    // Check if a WHT rate is set for the customer
+    if (wht_rate > 0) {
+        // Calculate WHT. NOTE: This assumes WHT is on the vatable_base (Total - VAT).
+        // If the invoice is non-VAT, vatable_base will equal the total (which is correct for your test plan).
+        whtAmount = (parseFloat(vatable_base) * (parseFloat(wht_rate) / 100));
+        
+        // Only apply if WHT is less than or equal to the balance
+        if (whtAmount <= fullBalance) {
+            amountPaid = (fullBalance - whtAmount);
+            document.getElementById('whtNotice').classList.remove('d-none');
+            document.getElementById('whtNotice').textContent = `Auto-calculated ${wht_rate}% WHT on ₱${vatable_base.toFixed(2)}.`;
+        } else {
+             // WHT is more than balance, just set to 0
+             whtAmount = 0;
+             document.getElementById('whtNotice').classList.add('d-none');
+        }
+    } else {
+        document.getElementById('whtNotice').classList.add('d-none');
+    }
+
+    // Set the hidden balance field
+    document.getElementById('paymentFullBalance').value = fullBalance.toFixed(2);
+
+    // Set the visible fields
+    document.getElementById('paymentAmount').value = amountPaid.toFixed(2);
+    document.getElementById('paymentWHT').value = whtAmount.toFixed(2);
+    
+    // Update summary display
+    document.getElementById('maxBalance').innerText = '₱' + fullBalance.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    
+    // Trigger calculation to update "Total Credited"
+    calculateWHT();
+}
+
+// ✅ NEW: calculateWHT function
+function calculateWHT(changedField) {
+    const fullBalance = parseFloat(document.getElementById('paymentFullBalance').value) || 0;
+    let amountPaidEl = document.getElementById('paymentAmount');
+    let whtAmountEl = document.getElementById('paymentWHT');
+    
+    let amountPaid = parseFloat(amountPaidEl.value) || 0;
+    let whtAmount = parseFloat(whtAmountEl.value) || 0;
+
+    if (changedField === 'amount') {
+        // If user changes Amount Paid, auto-calculate WHT
+        whtAmount = fullBalance - amountPaid;
+        if (whtAmount < 0) whtAmount = 0; // Don't allow negative WHT
+        whtAmountEl.value = whtAmount.toFixed(2);
+    } else if (changedField === 'wht') {
+        // If user changes WHT, auto-calculate Amount Paid
+        amountPaid = fullBalance - whtAmount;
+        if (amountPaid < 0) amountPaid = 0; // Don't allow negative payment
+        amountPaidEl.value = amountPaid.toFixed(2);
+    }
+
+    // Update Total Credited summary
+    let totalCredited = (parseFloat(amountPaidEl.value) || 0) + (parseFloat(whtAmountEl.value) || 0);
+    document.getElementById('totalCredited').innerText = '₱' + totalCredited.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+    // Check if total credited exceeds balance
+    const summaryEl = document.getElementById('totalCredited');
+    if (totalCredited.toFixed(2) != fullBalance.toFixed(2)) {
+        summaryEl.classList.add('text-danger');
+        summaryEl.classList.remove('text-success');
+    } else {
+        summaryEl.classList.remove('text-danger');
+        summaryEl.classList.add('text-success');
+    }
 }
 
 // Auto-calculate due date based on customer payment terms
