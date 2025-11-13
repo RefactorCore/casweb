@@ -34,6 +34,18 @@
                             {% for inv in invoices %}<option value="{{ inv.id }}">#{{ inv.id }} - {{ inv.customer.name }} ({{ inv.total|money }})</option>{% endfor %}
                         </select>
                     </div>
+                    <p class="text-muted">Optional: Return item to stock</p>
+                    <div class="mb-3">
+                        <label class="form-label">Product to Return</label>
+                        <select name="return_product_id" class="form-select">
+                            <option value="">None (financial adjustment only)</option>
+                            {% for p in products %}<option value="{{ p.id }}">{{ p.sku }} - {{ p.name }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Quantity to Return</label>
+                        <input type="number" step="1" name="return_quantity" class="form-control" placeholder="0">
+                    </div>
                     <div class="mb-3">
                         <label class="form-label">Total Return Amount (Gross)</label>
                         <input type="number" step="0.01" name="total_amount" class="form-control" required>
