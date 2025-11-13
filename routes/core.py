@@ -116,8 +116,6 @@ def index():
         current_filter_label = 'Last 7 Days'
 
     # --- Build FILTERED queries for Sales and Purchases ---
-    
-    # ✅ FIX: Add void filter to sales and purchases
     sales_query = db.session.query(func.sum(Sale.total)).filter(Sale.voided_at == None)
     purchases_query = db.session.query(func.sum(Purchase.total)).filter(Purchase.voided_at == None)
 
@@ -138,14 +136,11 @@ def index():
         intervals = [today - timedelta(hours=i) for i in range(11, -1, -1)]
         for hour_start in intervals:
             hour_end = hour_start + timedelta(hours=1)
-            
-            # ✅ FIX: Add void filter to chart query
             hour_total = (db.session.query(func.sum(Sale.total))
                           .filter(Sale.created_at >= hour_start)
                           .filter(Sale.created_at < hour_end)
-                          .filter(Sale.voided_at == None)  # <-- FIX
+                          .filter(Sale.voided_at == None)
                           .scalar() or 0)
-            
             sales_by_period.append(hour_total)
             labels.append(hour_start.strftime('%I%p'))
     else:
@@ -154,19 +149,15 @@ def index():
         elif period == '7':
             days = 7
         else:
-            # Default for 'all' - let's cap at 90 days for performance
             days = 90
             
         today_date = datetime.utcnow().date()
         last_n_days = [today_date - timedelta(days=i) for i in range(days - 1, -1, -1)]
         for day in last_n_days:
-            
-            # ✅ FIX: Add void filter to chart query
             day_total = (db.session.query(func.sum(Sale.total))
                          .filter(func.date(Sale.created_at) == day)
-                         .filter(Sale.voided_at == None)  # <-- FIX
+                         .filter(Sale.voided_at == None)
                          .scalar() or 0)
-            
             sales_by_period.append(day_total)
             labels.append(day.strftime('%b %d'))
             
@@ -177,37 +168,35 @@ def index():
             func.sum(SaleItem.qty).label('total_qty_sold')
         )
         .join(SaleItem, Product.id == SaleItem.product_id)
-        .join(Sale, Sale.id == SaleItem.sale_id)  # ✅ FIX: Join Sale to filter
-        .filter(Sale.voided_at == None)          # ✅ FIX: Add void filter
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .filter(Sale.voided_at == None)
         .group_by(Product.name)
         .order_by(func.sum(SaleItem.qty).desc())
         .limit(10)
         .all()
     )
 
-    # ✅ UPDATED: DUE DATES DASHBOARD DATA (AR & AP Invoices)
+    # --- DUE DATES DASHBOARD DATA (AR & AP Invoices) ---
     from models import ARInvoice, APInvoice, Customer, Supplier
     
-    # Get unpaid AR invoices with due dates (money we need to COLLECT)
     ar_due = ARInvoice.query.filter(
         ARInvoice.status != 'Paid',
         ARInvoice.due_date.isnot(None),
-        ARInvoice.voided_at == None  # ✅ FIX: Add void filter
+        ARInvoice.voided_at == None
     ).order_by(ARInvoice.due_date.asc()).limit(10).all()
     
-    # ✅ NEW: Get unpaid AP invoices with due dates (money we need to PAY)
     ap_due = APInvoice.query.filter(
         APInvoice.status != 'Paid',
         APInvoice.due_date.isnot(None),
-        APInvoice.voided_at == None  # ✅ FIX: Add void filter
+        APInvoice.voided_at == None
     ).order_by(APInvoice.due_date.asc()).limit(10).all()
     
-    # Combine and categorize by urgency
     due_items = []
     
-    # Process AR Invoices (Receivables - money coming IN)
+    # Process AR Invoices
     for inv in ar_due:
-        days_until_due = (inv.due_date - today.date()).days if inv.due_date else 999
+        # ✅ FIX: Subtract datetime from datetime (today), not today.date()
+        days_until_due = (inv.due_date - today).days if inv.due_date else 999
         balance = inv.total - inv.paid
         
         if balance <= 0:
@@ -226,12 +215,13 @@ def index():
             'urgency': urgency,
             'description': inv.description or '',
             'url': url_for('ar_ap.billing_invoices'),
-            'direction': 'receivable'  # Money coming IN
+            'direction': 'receivable'
         })
     
-    # ✅ NEW: Process AP Invoices (Payables - money going OUT)
+    # Process AP Invoices
     for inv in ap_due:
-        days_until_due = (inv.due_date - today.date()).days if inv.due_date else 999
+        # ✅ FIX: Subtract datetime from datetime (today), not today.date()
+        days_until_due = (inv.due_date - today).days if inv.due_date else 999
         balance = inv.total - inv.paid
         
         if balance <= 0:
@@ -250,17 +240,15 @@ def index():
             'urgency': urgency,
             'description': inv.description or '',
             'url': url_for('ar_ap.ap_invoices'),
-            'direction': 'payable'  # Money going OUT
+            'direction': 'payable'
         })
     
-    # Sort by due date (most urgent first)
+    # Sort by due date
     due_items.sort(key=lambda x: (x['urgency'] != 'overdue', x['urgency'] != 'due_soon', x['days_until_due']))
     
-    # Categorize for display
     overdue_items = [item for item in due_items if item['urgency'] == 'overdue']
     due_soon_items = [item for item in due_items if item['urgency'] == 'due_soon']
     upcoming_items = [item for item in due_items if item['urgency'] == 'upcoming'][:5]
-    # ✅ END OF UPDATED BLOCK
 
     return render_template(
         'index.html',
@@ -276,7 +264,6 @@ def index():
         top_sellers=top_sellers,
         current_period_filter=period,
         current_filter_label=current_filter_label,
-        # Pass due dates data to template
         overdue_items=overdue_items,
         due_soon_items=due_soon_items,
         upcoming_items=upcoming_items
