@@ -3,6 +3,8 @@ from flask_login import UserMixin
 from datetime import datetime
 from sqlalchemy import func
 import json
+from sqlalchemy.orm import validates
+
 
 db = SQLAlchemy()
 
@@ -46,6 +48,18 @@ class Product(db.Model):
 
     def adjust_stock(self, change):
         self.quantity = max(self.quantity + change, 0)
+    
+    @validates('sale_price', 'cost_price')
+    def validate_prices(self, key, value):
+        if value < 0:
+            raise ValueError(f'{key} cannot be negative')
+        return value
+    
+    @validates('quantity')
+    def validate_quantity(self, key, value):
+        if value < 0:
+            raise ValueError('Quantity cannot be negative')
+        return value
 
 
 # Add this new model after the Product model
