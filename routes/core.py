@@ -92,9 +92,15 @@ def index():
     products = Product.query.all()
     low_stock = [p for p in products if p.quantity <= 5 and p.is_active]
 
-    # --- Filter inventory value to only include active products ---
-    active_products = [p for p in products if p.is_active]
-    total_inventory_value = sum(p.cost_price * p.quantity for p in active_products)
+    # --- 📊 INVENTORY VALUE: Calculate from FIFO lots (not product.cost_price) ---
+    from models import InventoryLot
+    total_inventory_value = db.session.query(
+        func.sum(InventoryLot.quantity_remaining * InventoryLot.unit_cost)
+    ).join(Product).filter(
+        Product.is_active == True,
+        InventoryLot.quantity_remaining > 0
+    ).scalar() or 0.0
+    
     products_in_stock = Product.query.filter(Product.quantity > 0, Product.is_active == True).count()
 
     # --- Get period filter (default to '7' days) ---
@@ -117,20 +123,68 @@ def index():
         start_date = today - timedelta(days=7)
         current_filter_label = 'Last 7 Days'
 
-    # --- Build FILTERED queries for Sales and Purchases ---
-    sales_query = db.session.query(func.sum(Sale.total)).filter(Sale.voided_at == None)
-    purchases_query = db.session.query(func.sum(Purchase.total)).filter(Purchase.voided_at == None)
+    # --- 📊 SALES: Include both Cash (POS) and Credit (AR Invoices) ---
+    from models import ARInvoice, APInvoice
+    
+    cash_sales_query = db.session.query(func.sum(Sale.total)).filter(Sale.voided_at == None)
+    ar_sales_query = db.session.query(func.sum(ARInvoice.total)).filter(ARInvoice.voided_at == None)
+    
+    cash_purchases_query = db.session.query(func.sum(Purchase.total)).filter(Purchase.voided_at == None)
+    ap_purchases_query = db.session.query(func.sum(APInvoice.total)).filter(APInvoice.voided_at == None)
 
     if start_date:
-        sales_query = sales_query.filter(Sale.created_at >= start_date)
-        purchases_query = purchases_query.filter(Purchase.created_at >= start_date)
+        cash_sales_query = cash_sales_query.filter(Sale.created_at >= start_date)
+        ar_sales_query = ar_sales_query.filter(ARInvoice.date >= start_date)
+        cash_purchases_query = cash_purchases_query.filter(Purchase.created_at >= start_date)
+        ap_purchases_query = ap_purchases_query.filter(APInvoice.date >= start_date)
 
     # --- Execute FILTERED queries ---
-    total_sales = sales_query.scalar() or 0
-    total_purchases = purchases_query.scalar() or 0
-    net_income = total_sales - total_purchases
+    total_cash_sales = cash_sales_query.scalar() or 0
+    total_ar_sales = ar_sales_query.scalar() or 0
+    total_cash_purchases = cash_purchases_query.scalar() or 0
+    total_ap_purchases = ap_purchases_query.scalar() or 0
+    
+    # 📊 COMBINED TOTALS (Cash + Credit)
+    total_sales = total_cash_sales + total_ar_sales
+    total_purchases = total_cash_purchases + total_ap_purchases
 
-    # --- Charting Logic ---
+    # --- 📊 CALCULATE TRUE NET INCOME FROM ACCOUNTING RECORDS ---
+    from routes.reports import aggregate_account_balances
+    
+    end_date = None
+    if period != 'all':
+        end_date = today
+    
+    agg = aggregate_account_balances(start_date, end_date)
+    
+    total_revenue = 0.0
+    total_expenses = 0.0
+    total_cogs = 0.0
+    
+    try:
+        cogs_code = get_system_account_code('COGS')
+    except:
+        cogs_code = None
+    
+    for acc_code, bal in agg.items():
+        acct_rec = Account.query.filter_by(code=acc_code).first()
+        if not acct_rec:
+            continue
+        
+        if acct_rec.type == 'Revenue':
+            # Revenue accounts have credit balances (negative in agg)
+            total_revenue += abs(bal)
+        elif acct_rec.type == 'Expense':
+            if cogs_code and acc_code == cogs_code:
+                total_cogs += abs(bal)
+            else:
+                total_expenses += abs(bal)
+    
+    # 📊 TRUE NET INCOME (Revenue - COGS - Expenses)
+    gross_profit = total_revenue - total_cogs
+    net_income = gross_profit - total_expenses
+
+    # --- Charting Logic (unchanged) ---
     sales_by_period = []
     labels = []
     
@@ -163,7 +217,7 @@ def index():
             sales_by_period.append(day_total)
             labels.append(day.strftime('%b %d'))
             
-    # --- Top Sellers ---
+    # --- Top Sellers (unchanged) ---
     top_sellers = (
         db.session.query(
             Product.name,
@@ -178,7 +232,7 @@ def index():
         .all()
     )
 
-    # --- DUE DATES DASHBOARD DATA (AR & AP Invoices) ---
+    # --- ✅ FIXED: DUE DATES DASHBOARD DATA (AR & AP Invoices) ---
     from models import ARInvoice, APInvoice, Customer, Supplier
     
     ar_due = ARInvoice.query.filter(
@@ -194,12 +248,14 @@ def index():
     ).order_by(APInvoice.due_date.asc()).limit(10).all()
     
     due_items = []
+    today_date = today.date()  # Convert to date for comparison
     
     # Process AR Invoices
     for inv in ar_due:
-        # ✅ FIX: Ensure both are datetime objects
+        # ✅ FIX: Handle both date and datetime objects
         if inv.due_date:
-            days_until_due = (inv.due_date.replace(tzinfo=None) - today.replace(tzinfo=None)).days
+            due_date_obj = inv.due_date.date() if hasattr(inv.due_date, 'date') else inv.due_date
+            days_until_due = (due_date_obj - today_date).days
         else:
             days_until_due = 999
         
@@ -226,9 +282,10 @@ def index():
 
     # Process AP Invoices
     for inv in ap_due:
-        # ✅ FIX: Ensure both are datetime objects
+        # ✅ FIX: Handle both date and datetime objects
         if inv.due_date:
-            days_until_due = (inv.due_date.replace(tzinfo=None) - today.replace(tzinfo=None)).days
+            due_date_obj = inv.due_date.date() if hasattr(inv.due_date, 'date') else inv.due_date
+            days_until_due = (due_date_obj - today_date).days
         else:
             days_until_due = 999
         
@@ -264,10 +321,11 @@ def index():
         'index.html',
         products=products,
         low_stock=low_stock,
-        total_sales=total_sales,
-        total_purchases=total_purchases,
-        net_income=net_income,
-        total_inventory_value=total_inventory_value,
+        total_sales=total_sales,  # 📊 Now includes Cash + Credit Sales
+        total_purchases=total_purchases,  # 📊 Now includes Cash + Credit Purchases
+        net_income=net_income,  # 📊 True accounting net income
+        gross_profit=gross_profit,  # 📊 NEW: Shows gross profit
+        total_inventory_value=total_inventory_value,  # 📊 From FIFO lots
         products_in_stock=products_in_stock,
         labels=labels,
         sales_by_day=sales_by_period,
@@ -2237,63 +2295,100 @@ def create_inventory_movement():
     if not items:
         return jsonify({'error': 'No items provided'}), 400
 
-    movement = InventoryMovement(
-        movement_type=movement_type,
-        from_branch_id=from_branch_id,
-        to_branch_id=to_branch_id,
-        notes=notes,
-        created_by=current_user.id
-    )
-    db.session.add(movement)
-    db.session.flush()  # Get movement.id
-
-    for item in items:
-        sku = item['sku']
-        quantity = item['quantity']
-        unit_cost = item['unit_cost']
-        
-        # Look up product by SKU
-        product = Product.query.filter_by(sku=sku).first()
-        if not product:
-            return jsonify({'error': f'Product with SKU {sku} not found'}), 400
-        
-        product_id = product.id
-        
-        movement_item = InventoryMovementItem(
-            movement_id=movement.id,
-            product_id=product_id,
-            quantity=quantity,
-            unit_cost=unit_cost
+    try:
+        movement = InventoryMovement(
+            movement_type=movement_type,
+            from_branch_id=from_branch_id,
+            to_branch_id=to_branch_id,
+            notes=notes,
+            created_by=current_user.id
         )
-        db.session.add(movement_item)
+        db.session.add(movement)
+        db.session.flush()  # Get movement.id
 
-        # Adjust inventory quantities (simplified - assumes central inventory for now)
-        if movement_type == 'transfer' and from_branch_id:
-            product.adjust_stock(-quantity)  # Reduce from source
-        elif movement_type == 'receive' and to_branch_id:
-            product.adjust_stock(quantity)  # Increase at destination
+        for item in items:
+            sku = item['sku']
+            quantity = item['quantity']
+            unit_cost = item['unit_cost']
+            
+            # Look up product by SKU
+            product = Product.query.filter_by(sku=sku).first()
+            if not product:
+                db.session.rollback()
+                return jsonify({'error': f'Product with SKU {sku} not found'}), 400
+            
+            product_id = product.id
+            
+            # ✅ FIX: Check stock availability for transfers
+            if movement_type == 'transfer' and product.quantity < quantity:
+                db.session.rollback()
+                return jsonify({
+                    'error': f'Insufficient stock for {product.name}. Available: {product.quantity}, Requested: {quantity}'
+                }), 400
+            
+            movement_item = InventoryMovementItem(
+                movement_id=movement.id,
+                product_id=product_id,
+                quantity=quantity,
+                unit_cost=unit_cost
+            )
+            db.session.add(movement_item)
 
-    db.session.commit()
-    
-    # Prepare response data for dynamic update
-    from_branch_name = movement.from_branch.name if movement.from_branch else 'N/A'
-    to_branch_name = movement.to_branch.name if movement.to_branch else 'N/A'
-    items_count = len(movement.items)
-    
-    return jsonify({
-    'success': True, 
-    'message': 'Movement recorded successfully',
-    'movement': {
-        'id': movement.id,
-        'date': movement.created_at.strftime('%Y-%m-%d'),
-        'type': movement.movement_type.title(),
-        'from': from_branch_name,
-        'to': to_branch_name,
-        'items': items_count,
-        'notes': movement.notes or '-'
-        },
-        'download_url': url_for('core.export_movement_csv', movement_id=movement.id) if movement.movement_type == 'transfer' else None
-    })
+            # ✅ FIX: Handle FIFO lots correctly
+            if movement_type == 'transfer' and from_branch_id:
+                # Transfer OUT: Consume FIFO lots (like a sale)
+                try:
+                    cogs_value, _ = consume_inventory_fifo(
+                        product_id=product.id,
+                        quantity_needed=quantity,
+                        adjustment_id=movement.id  # Link to movement for tracking
+                    )
+                    # Update unit_cost with actual FIFO cost
+                    movement_item.unit_cost = cogs_value / quantity if quantity > 0 else unit_cost
+                except ValueError as e:
+                    db.session.rollback()
+                    return jsonify({'error': f'FIFO error for {product.name}: {str(e)}'}), 400
+                
+                # Reduce quantity
+                product.quantity -= quantity
+                
+            elif movement_type == 'receive' and to_branch_id:
+                # Receive IN: Create new FIFO lot (like a purchase)
+                create_inventory_lot(
+                    product_id=product.id,
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    is_opening_balance=False
+                )
+                
+                # Increase quantity
+                product.quantity += quantity
+
+        db.session.commit()
+        
+        # Prepare response data for dynamic update
+        from_branch_name = movement.from_branch.name if movement.from_branch else 'N/A'
+        to_branch_name = movement.to_branch.name if movement.to_branch else 'N/A'
+        items_count = len(movement.items)
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Movement recorded successfully',
+            'movement': {
+                'id': movement.id,
+                'date': movement.created_at.strftime('%Y-%m-%d'),
+                'type': movement.movement_type.title(),
+                'from': from_branch_name,
+                'to': to_branch_name,
+                'items': items_count,
+                'notes': movement.notes or '-'
+            },
+            'download_url': url_for('core.export_movement_csv', movement_id=movement.id) if movement.movement_type == 'transfer' else None
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Error creating movement: {str(e)}'}), 500
 
 @core_bp.route('/branches', methods=['GET', 'POST'])
 @login_required
