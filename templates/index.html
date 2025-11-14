@@ -19,31 +19,41 @@
         <div class="card-body">
           <h6 class="text-muted">Total Sales ({{ current_filter_label }})</h6>
           <h4 class="text-success">₱{{ total_sales | round(2) }}</h4>
+          <!-- ✅ ADD THIS LINE -->
+          <small class="text-muted">Includes Cash (POS) + Credit (AR)</small>
         </div>
       </div>
     </div>
+
     <div class="col-md-3">
       <div class="card shadow-sm text-center border-info">
         <div class="card-body">
           <h6 class="text-muted">Total Purchases ({{ current_filter_label }})</h6>
           <h4 class="text-danger">₱{{ total_purchases | round(2) }}</h4>
+          <!-- ✅ ADD THIS LINE -->
+          <small class="text-muted">Includes Cash + Credit (AP)</small>
         </div>
       </div>
     </div>
+
     <div class="col-md-3">
       <div class="card shadow-sm text-center border-warning">
         <div class="card-body">
           <h6 class="text-muted">Inventory Value</h6>
           <h4>₱{{ total_inventory_value | round(2) }}</h4>
-          <small class="text-muted">{{ products_in_stock }} total products</small>
+          <!-- ✅ UPDATE THIS LINE -->
+          <small class="text-muted">{{ products_in_stock }} products (FIFO valued)</small>
         </div>
       </div>
     </div>
+
     <div class="col-md-3">
       <div class="card shadow-sm text-center border-success">
         <div class="card-body">
           <h6 class="text-muted">Net Income ({{ current_filter_label }})</h6>
           <h4 class="text-success">₱{{ net_income | round(2) }}</h4>
+          <!-- ✅ ADD THIS LINE -->
+          <small class="text-muted">Revenue - COGS - Expenses</small>
         </div>
       </div>
     </div>
