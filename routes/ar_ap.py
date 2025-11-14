@@ -215,7 +215,7 @@ def ap_invoices():
 
 @ar_ap_bp.route('/payment', methods=['POST'])
 @login_required
-@role_required('Admin', 'Accountant') # Added role protection
+@role_required('Admin', 'Accountant')
 def record_payment():
     """
     Record payment for AR or AP and create corresponding journal entry.
@@ -227,22 +227,16 @@ def record_payment():
         ref_id = int(request.form.get('ref_id') or 0)
     except ValueError:
         flash('Invalid reference ID.', 'danger')
-        return redirect(url_for('ar_ap.ar_invoices')) # Redirect to a safer page
+        return redirect(url_for('ar_ap.ar_invoices'))
 
     try:
-        # ✅ FIX: Read 'amount' (cash/bank) from the form
         amount = float(request.form.get('amount') or 0.0)
-        
-        # ✅ FIX: Read 'wht_amount' from the form
         wht_amount = float(request.form.get('wht_amount') or 0.0)
-        
     except ValueError:
         flash('Invalid amount or WHT value.', 'danger')
         return redirect(request.referrer or url_for('ar_ap.ar_invoices'))
 
     method = request.form.get('method') or 'Cash'
-    
-    # ✅ FIX: Total credited is the sum of cash + tax
     total_credited = round(amount + wht_amount, 2)
 
     if total_credited <= 0:
@@ -255,18 +249,13 @@ def record_payment():
             flash(f'AR Invoice {ref_id} not found.', 'danger')
             return redirect(url_for('ar_ap.ar_invoices'))
 
-        # ✅ FIX: Remove the bad WHT recalculation logic. We trust the form.
-
-        # ✅ FIX: Update invoice paid amount with the total_credited
         inv.paid += total_credited
 
-        # ✅ FIX: Update status based on total. Add a 0.001 tolerance for float math.
         if inv.paid >= (inv.total - 0.001):
             inv.status = 'Paid'
         else:
             inv.status = 'Partially Paid'
             
-        # ✅ FIX: The correct 3-line balanced Journal Entry
         je_lines = [
             {'account_code': get_system_account_code('Cash'), 'debit': round(amount, 2), 'credit': 0},
             {'account_code': get_system_account_code('Creditable Withholding Tax'), 'debit': round(wht_amount, 2), 'credit': 0},
@@ -281,12 +270,9 @@ def record_payment():
             flash(f'AP Invoice {ref_id} not found.', 'danger')
             return redirect(url_for('ar_ap.ap_invoices'))
         
-        # Note: This test only covers AR. AP WHT (as a payable) is a separate test.
-        # We assume for AP, 'amount' is all that's paid.
         inv.paid += amount
         inv.status = 'Paid' if inv.paid >= inv.total else 'Partially Paid'
         
-        # JE: Debit Accounts Payable, Credit Cash
         je_lines = [
             {'account_code': get_system_account_code('Accounts Payable'), 'debit': round(amount, 2), 'credit': 0},
             {'account_code': get_system_account_code('Cash'), 'debit': 0, 'credit': round(amount, 2)}
@@ -299,7 +285,6 @@ def record_payment():
         return redirect(url_for('core.index'))
 
     try:
-        # Save the payment record
         p = Payment(
             amount=round(amount, 2), 
             ref_type=ref_type, 
@@ -309,19 +294,14 @@ def record_payment():
             date=datetime.utcnow()
         )
         db.session.add(p)
-        db.session.flush() # Flush to get the payment ID 'p.id'
+        db.session.flush()
 
-        # ✅ FIX: Create the JE with only the required arguments
+        # ✅ FIX: Create JE with only valid parameters
         je = JournalEntry(
             description=f'Payment for {ref_type} #{ref_id}', 
             entries_json=json.dumps(je_lines)
         )
-        
-        # ✅ FIX: Set the other properties *after* creating it
-        je.payment_id = p.id  # This links the JE to the Payment
-        # The 'created_at' date is set automatically by the model
-
-        db.session.add(je) # Add the new JE to the session
+        db.session.add(je)
         
         log_action(f'Recorded Payment #{p.id} of ₱{p.amount:,.2f} (WHT: ₱{p.wht_amount:,.2f}) for {ref_type} #{ref_id}.')
         db.session.commit()

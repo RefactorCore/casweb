@@ -24,12 +24,6 @@ def log_action(action_description, user=None):
         ip_address=request.remote_addr
     )
     db.session.add(log)
-    # This commit is handled by the route's final commit.
-    # db.session.commit()
-    # --- FIX: Let the route handle the commit ---
-    # We should add to the session, but let the calling route
-    # commit the transaction as a whole.
-    db.session.add(log)
 
 
 # --- NEW FUNCTION TO REMOVE MAGIC NUMBERS ---

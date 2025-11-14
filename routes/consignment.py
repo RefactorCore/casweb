@@ -5,6 +5,7 @@ from routes.decorators import role_required
 from routes.utils import paginate_query, log_action
 from datetime import datetime, timedelta
 from sqlalchemy import func
+from decimal import Decimal, ROUND_HALF_UP
 
 
 consignment_bp = Blueprint('consignment', __name__, url_prefix='/consignment')
@@ -196,7 +197,8 @@ def receive():
             
             for item_data in items:
                 qty = int(item_data.get('quantity', 0))
-                price = float(item_data.get('retail_price', 0))
+                # ✅ IMPROVED: Use Decimal for financial calculations
+                price = Decimal(str(item_data.get('retail_price', 0))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                 
                 if qty <= 0 or price <= 0:
                     continue
@@ -208,13 +210,13 @@ def receive():
                     description=item_data.get('description'),
                     barcode=item_data.get('barcode'),
                     quantity_received=qty,
-                    retail_price=price
+                    retail_price=float(price)  # Convert back to float for storage
                 )
                 
                 db.session.add(item)
                 
                 total_items += qty
-                total_value += (qty * price)
+                total_value += float(qty * price)
             
             # Update consignment totals
             consignment.total_items = total_items
@@ -388,25 +390,25 @@ def remit_payment(consignment_id):
         items_being_returned = []  # Track for receipt
         
         for item in consignment.items:
-            # ✅ CRITICAL: Calculate available BEFORE changing quantity_returned
-            qty_available = item.quantity_received - item.quantity_sold - item.quantity_returned - item.quantity_damaged
+            # Calculate available BEFORE any modifications
+            current_available = item.quantity_received - item.quantity_sold - item.quantity_returned - item.quantity_damaged
             
-            if qty_available > 0:
+            if current_available > 0:
                 # Store details for receipt
                 items_being_returned.append({
                     'sku': item.sku,
                     'name': item.product_name,
-                    'quantity': qty_available,
+                    'quantity': current_available,
                     'retail_price': item.retail_price,
-                    'total_value': qty_available * item.retail_price
+                    'total_value': current_available * item.retail_price
                 })
                 
-                # Now update the quantity
-                item.quantity_returned += qty_available  # ✅ Use += to add to existing
-                total_returned += qty_available
+                # ✅ FIX: Set the final returned quantity (not +=)
+                item.quantity_returned = item.quantity_received - item.quantity_sold - item.quantity_damaged
+                total_returned += current_available
                 
                 log_action(
-                    f'Auto-returned {qty_available} units of {item.product_name} '
+                    f'Auto-returned {current_available} units of {item.product_name} '
                     f'on settlement of {consignment.receipt_number}'
                 )
         

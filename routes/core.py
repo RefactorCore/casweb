@@ -14,6 +14,8 @@ from routes.decorators import role_required
 from .utils import log_action
 from extensions import limiter
 from routes.sku_utils import generate_sku
+from routes.fifo_utils import create_inventory_lot, consume_inventory_fifo
+
 
 core_bp = Blueprint('core', __name__)
 VAT_RATE = Config.VAT_RATE
@@ -195,8 +197,12 @@ def index():
     
     # Process AR Invoices
     for inv in ar_due:
-        # ✅ FIX: Subtract datetime from datetime (today), not today.date()
-        days_until_due = (inv.due_date - today).days if inv.due_date else 999
+        # ✅ FIX: Ensure both are datetime objects
+        if inv.due_date:
+            days_until_due = (inv.due_date.replace(tzinfo=None) - today.replace(tzinfo=None)).days
+        else:
+            days_until_due = 999
+        
         balance = inv.total - inv.paid
         
         if balance <= 0:
@@ -217,11 +223,15 @@ def index():
             'url': url_for('ar_ap.billing_invoices'),
             'direction': 'receivable'
         })
-    
+
     # Process AP Invoices
     for inv in ap_due:
-        # ✅ FIX: Subtract datetime from datetime (today), not today.date()
-        days_until_due = (inv.due_date - today).days if inv.due_date else 999
+        # ✅ FIX: Ensure both are datetime objects
+        if inv.due_date:
+            days_until_due = (inv.due_date.replace(tzinfo=None) - today.replace(tzinfo=None)).days
+        else:
+            days_until_due = 999
+        
         balance = inv.total - inv.paid
         
         if balance <= 0:
@@ -334,15 +344,19 @@ def update_product():
         flash('Product not found.', 'danger')
         return redirect(request.referrer or url_for('core.inventory'))
 
-    # Update fields
-    product.name = request.form.get('name')
-    product.sale_price = float(request.form.get('sale_price') or 0)
-    product.cost_price = float(request.form.get('cost_price') or 0)
-    # product.quantity = int(request.form.get('quantity') or 0)
+    try:
+        # Update fields
+        product.name = request.form.get('name')
+        product.sale_price = float(request.form.get('sale_price') or 0)
+        product.cost_price = float(request.form.get('cost_price') or 0)
 
-    log_action(f'Updated product SKU: {product.sku}, Name: {product.name}.')
-    db.session.commit()
-    flash(f'Product {product.sku} updated successfully.', 'success')
+        log_action(f'Updated product SKU: {product.sku}, Name: {product.name}.')
+        db.session.commit()
+        flash(f'Product {product.sku} updated successfully.', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error updating product: {str(e)}', 'danger')
+    
     return redirect(request.referrer or url_for('core.inventory'))
 
 
@@ -1272,7 +1286,7 @@ def api_sale():
             
             # Calculate commission for each consignment
             for cons_id, group in consignment_groups.items():
-                commission_rate = group['consignment'].commission_rate / 100
+                commission_rate = group['consignment'].commission_rate / 100 if group['consignment'].commission_rate else 0
                 commission = round(group['total'] * commission_rate, 2)
                 consignment_commission_total += commission
 
@@ -1421,10 +1435,11 @@ def sales():
     if start_date:
         cash_sales_query = cash_sales_query.filter(Sale.created_at >= start_date)
         ar_invoices_query = ar_invoices_query.filter(ARInvoice.date >= start_date)
-    
+
     if end_date:
-        cash_sales_query = cash_sales_query.filter(Sale.created_at < end_date)
-        ar_invoices_query = ar_invoices_query.filter(ARInvoice.date < end_date)
+        # ✅ FIX: Use <= instead of < for inclusive end date
+        cash_sales_query = cash_sales_query.filter(Sale.created_at <= end_date)
+        ar_invoices_query = ar_invoices_query.filter(ARInvoice.date <= end_date)
 
     # ✅ FIXED: Simplified search - search happens AFTER combining results
     # Get all results first
@@ -2002,7 +2017,6 @@ def settings():
 @role_required('Admin', 'Accountant')
 def adjust_stock():
     # --- FIX: Import FIFO utils ---
-    from routes.fifo_utils import create_inventory_lot, consume_inventory_fifo
 
     product_id = int(request.form.get('product_id'))
     quantity = int(request.form.get('quantity'))

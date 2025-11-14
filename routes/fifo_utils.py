@@ -25,6 +25,9 @@ def create_inventory_lot(product_id, quantity, unit_cost, purchase_id=None,
     """
     if quantity <= 0:
         raise ValueError("Quantity must be positive")
+
+    if unit_cost < 0:
+        raise ValueError("Unit cost cannot be negative")
     
     lot = InventoryLot(
         product_id=product_id,
