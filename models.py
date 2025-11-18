@@ -78,6 +78,9 @@ class InventoryLot(db.Model):
     purchase_item_id = db.Column(db.Integer, db.ForeignKey('purchase_item.id'), nullable=True)
     adjustment_id = db.Column(db.Integer, db.ForeignKey('stock_adjustment.id'), nullable=True)
     
+    movement_id = db.Column(db.Integer, db.ForeignKey('inventory_movement.id'), nullable=True)
+    movement = db.relationship('InventoryMovement', backref='lots')
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     
     # For tracking initial inventory from bulk uploads
