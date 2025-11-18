@@ -96,7 +96,7 @@
     <!-- Add Item Form -->
     <div class="row g-2 align-items-end mt-2">
       <div class="col-md-3">
-        <label class="form-label">SKU <span class="text-danger">*</span></label>
+        <label class="form-label">SKU </label>
         <input id="p-sku" type="text" class="form-control" placeholder="Enter SKU" />
         <!-- ✅ NEW: SKU Status Alert -->
         <small id="sku-status-alert" class="sku-alert"></small>
@@ -198,25 +198,26 @@ function checkSkuExists(sku) {
   const costInput = document.getElementById('p-unit');
   const statusAlert = document.getElementById('sku-status-alert');
   
+  // Case A: Empty SKU -> Auto Generation
   if (!sku || sku.trim() === '') {
     skuInput.classList.remove('sku-status-new', 'sku-status-exists');
-    statusAlert.textContent = '';
     nameInput.readOnly = false;
+    
+    // Visual feedback for Auto-Gen
+    statusAlert.className = 'sku-alert text-info';
+    statusAlert.innerHTML = `<i class="bi bi-magic"></i> <strong>Auto-Generate SKU:</strong> Leave blank to auto-create SKU from Name`;
     return;
   }
 
   fetch(`/api/product/${encodeURIComponent(sku.trim())}`)
     .then(res => {
-      if (res.ok) {
-        return res.json();
-      } else if (res.status === 404) {
-        return null;
-      }
+      if (res.ok) return res.json();
+      if (res.status === 404) return null;
       throw new Error('Failed to check SKU');
     })
     .then(product => {
       if (product) {
-        // ✅ SKU EXISTS
+        // SKU Exists
         skuInput.classList.remove('sku-status-new');
         skuInput.classList.add('sku-status-exists');
         
@@ -225,23 +226,19 @@ function checkSkuExists(sku) {
         costInput.value = product.cost_price.toFixed(2);
         
         statusAlert.className = 'sku-alert text-success';
-        statusAlert.innerHTML = `✅ <strong>Existing Product:</strong> ${product.name} (Current Stock: ${product.quantity})`;
+        statusAlert.innerHTML = `✅ <strong>Existing:</strong> ${product.name} (Stock: ${product.quantity})`;
       } else {
-        // ✅ NEW SKU
+        // New Custom SKU
         skuInput.classList.remove('sku-status-exists');
         skuInput.classList.add('sku-status-new');
-        
         nameInput.readOnly = false;
-        if (nameInput.value === '') {
-          nameInput.value = '';
-        }
         
         statusAlert.className = 'sku-alert text-warning';
-        statusAlert.innerHTML = `🆕 <strong>New Product</strong> - Please enter product name and cost`;
+        statusAlert.innerHTML = `🆕 <strong>New SKU:</strong> System will create this specific SKU`;
       }
     })
     .catch(err => {
-      console.error('Error checking SKU:', err);
+      console.error(err);
       statusAlert.className = 'sku-alert text-danger';
       statusAlert.textContent = '⚠️ Error checking SKU';
     });
@@ -417,17 +414,20 @@ new TomSelect('#product-select', {
 document.getElementById('add-p').onclick = (e) => {
   e.preventDefault();
 
-  const sku = document.getElementById('p-sku').value.trim();
+  let sku = document.getElementById('p-sku').value.trim();
   const name = document.getElementById('p-name').value.trim();
   const qty = parseInt(document.getElementById('p-qty').value) || 0;
   const unit = parseFloat(document.getElementById('p-unit').value) || 0;
 
-  if (!sku || !name || qty <= 0) {
-    return alert('SKU, Product Name, and a valid Quantity are required.');
+  if (!name || qty <= 0) {
+    return alert('Product Name and a valid Quantity are required.');
+  }
+
+  if (!sku) {
+      sku = "AUTO"; 
   }
 
   const purchaseIsVatable = document.getElementById('purchaseIsVatable').checked;
-
   const net = Math.round(qty * unit * 100) / 100;
   const vat = purchaseIsVatable ? Math.round(net * VAT_RATE * 100) / 100 : 0.00;
   const line_total = Math.round((net + vat) * 100) / 100;
@@ -435,19 +435,21 @@ document.getElementById('add-p').onclick = (e) => {
   items.push({ sku, name, qty, unit_cost: unit, net, vat, line_total });
   render();
 
-  // Clear inputs
   document.getElementById('p-sku').value = '';
   document.getElementById('p-name').value = '';
   document.getElementById('p-qty').value = 1;
   document.getElementById('p-unit').value = '0.00';
-  document.getElementById('product-select').tomselect.clear();
+  if (document.getElementById('product-select').tomselect) {
+      document.getElementById('product-select').tomselect.clear();
+  }
   
-  // ✅ Clear status
+  // Reset Status
   document.getElementById('p-sku').classList.remove('sku-status-new', 'sku-status-exists');
   document.getElementById('sku-status-alert').textContent = '';
   document.getElementById('p-name').readOnly = false;
-  
   document.getElementById('p-sku').focus();
+
+  checkSkuExists('');
 };
 
 // When purchase-level vatable checkbox changes
@@ -466,5 +468,7 @@ document.getElementById('purchase-form').addEventListener('submit', (e) => {
   recalcItems();
   document.getElementById('items_json').value = JSON.stringify(items);
 });
+
+checkSkuExists('');
 </script>
 {% endblock %}
