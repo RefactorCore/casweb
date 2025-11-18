@@ -51,9 +51,13 @@
                         <td>₱{{ "%.2f"|format(lot.total_value) }}</td>
                         <td>
                             {% if lot.is_opening_balance %}
-                            <span class="badge bg-info">Opening Balance</span>
+                                <span class="badge bg-info">Opening Balance</span>
+                            {% elif lot.movement_id %}
+                                <span class="badge bg-primary">Receive</span>
+                            {% elif lot.purchase_id %}
+                                <span class="badge bg-success">Purchase</span>
                             {% else %}
-                            <span class="badge bg-success">Purchase</span>
+                                <span class="badge bg-secondary">Other</span>
                             {% endif %}
                         </td>
                     </tr>
