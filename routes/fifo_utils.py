@@ -7,21 +7,10 @@ from datetime import datetime
 
 
 def create_inventory_lot(product_id, quantity, unit_cost, purchase_id=None, 
-                         purchase_item_id=None, adjustment_id=None, is_opening_balance=False):
+                         purchase_item_id=None, adjustment_id=None, movement_id=None, is_opening_balance=False):
     """
     Create a new inventory lot when receiving inventory.
-    
-    Args:
-        product_id: ID of the product
-        quantity: Number of units received
-        unit_cost: Cost per unit
-        purchase_id: Reference to purchase (optional)
-        purchase_item_id: Reference to purchase item (optional)
-        adjustment_id: Reference to stock adjustment (optional)
-        is_opening_balance: True if this is from initial inventory setup
-    
-    Returns:
-        InventoryLot object
+    Accepts optional movement_id to link the lot to an InventoryMovement (receive).
     """
     if quantity <= 0:
         raise ValueError("Quantity must be positive")
@@ -36,6 +25,7 @@ def create_inventory_lot(product_id, quantity, unit_cost, purchase_id=None,
         purchase_id=purchase_id,
         purchase_item_id=purchase_item_id,
         adjustment_id=adjustment_id,
+        movement_id=movement_id,   # <-- set movement link
         is_opening_balance=is_opening_balance,
         created_at=datetime.utcnow()
     )
@@ -191,12 +181,6 @@ def get_weighted_average_cost(product_id):
 def get_inventory_lots_summary(product_id):
     """
     Get a summary of all active inventory lots for a product.
-    
-    Args:
-        product_id: ID of the product
-    
-    Returns:
-        list: List of dicts with lot information
     """
     lots = InventoryLot.query.filter(
         InventoryLot.product_id == product_id,
@@ -212,7 +196,9 @@ def get_inventory_lots_summary(product_id):
             'total_value': round(lot.quantity_remaining * lot.unit_cost, 2),
             'created_at': lot.created_at,
             'age_days': (datetime.utcnow() - lot.created_at).days,
-            'is_opening_balance': lot.is_opening_balance
+            'is_opening_balance': lot.is_opening_balance,
+            'movement_id': getattr(lot, 'movement_id', None),   # <-- include movement id
+            'purchase_id': getattr(lot, 'purchase_id', None)
         })
     
     return summary

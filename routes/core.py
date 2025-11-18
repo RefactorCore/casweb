@@ -2479,6 +2479,7 @@ def create_inventory_movement():
                     product_id=product.id,
                     quantity=quantity,
                     unit_cost=unit_cost,
+                    movement_id=movement.id,
                     is_opening_balance=False
                 )
                 
