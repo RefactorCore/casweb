@@ -93,77 +93,74 @@ INDUSTRY_CATEGORIES = {
 def generate_sku(product_name, category=None, custom_sku=None, industry=None):
     """
     Universal SKU generator for any retail business.
-    
+
     Args:
         product_name: Name of the product
         category: Optional category code (e.g., "TIR", "DRS", "SKN")
         custom_sku: Optional manual SKU (validated for uniqueness)
         industry: Optional industry hint for auto-detection
-    
+
     Returns:
         Unique SKU string
-    
-    Examples:
-        generate_sku("Leo Tires", "TIR") -> "TIR-00001"
-        generate_sku("Floral Dress", "DRS") -> "DRS-00001"
-        generate_sku("Milk Tea Large") -> "PRD-00001" (generic)
-        generate_sku("Custom Product", custom_sku="CUSTOM-001") -> "CUSTOM-001"
     """
-    
+    import re
+    from datetime import datetime
+    from models import Product
+
     # 1. CUSTOM SKU: Validate and use if provided
     if custom_sku and custom_sku.strip():
         custom_sku = custom_sku.strip().upper()
-        
+
         # Validate format
         if not re.match(r'^[A-Z0-9-]+$', custom_sku):
             raise ValueError("SKU can only contain letters, numbers, and hyphens")
-        
+
         if len(custom_sku) > 64:
             raise ValueError("SKU is too long (max 64 characters)")
-        
+
         # Check uniqueness
         existing = Product.query.filter_by(sku=custom_sku).first()
         if existing:
             raise ValueError(f"SKU '{custom_sku}' already exists for: {existing.name}")
-        
+
         return custom_sku
-    
+
     # 2. DETERMINE PREFIX
     if category and category.strip():
-        # User provided category code
         prefix = category.strip().upper()[:3]
     else:
-        # Auto-detect from product name
         prefix = auto_detect_category(product_name, industry)
-    
-    # 3. GENERATE SEQUENTIAL NUMBER
-    # Find last SKU with this prefix
-    last_product = Product.query.filter(
-        Product.sku.like(f'{prefix}-%')
-    ).order_by(Product.sku.desc()).first()
-    
-    if last_product:
-        try:
-            # Extract number from SKU (e.g., "TIR-00005" -> 5)
-            parts = last_product.sku.split('-')
-            last_num_str = parts[-1]
-            last_num = int(last_num_str)
-            next_num = last_num + 1
-        except (ValueError, IndexError):
-            next_num = 1
-    else:
-        next_num = 1
-    
+
+    # 3. GENERATE SEQUENTIAL NUMBER (robust)
+    # Use a regex to extract the numeric segment from existing SKUs
+    # Matches: PREFIX-12345 or PREFIX-00123-extra (captures the numeric block after first dash)
+    numeric_pattern = re.compile(rf'^{re.escape(prefix)}-(\d{{1,}})(?:$|-)')
+    candidates = Product.query.filter(Product.sku.like(f'{prefix}-%')).all()
+
+    max_num = 0
+    for p in candidates:
+        m = numeric_pattern.match(p.sku)
+        if m:
+            try:
+                n = int(m.group(1))
+                if n > max_num:
+                    max_num = n
+            except ValueError:
+                # ignore non-numeric matches
+                continue
+
+    next_num = max_num + 1
+
     # 4. FORMAT SKU
     new_sku = f"{prefix}-{next_num:05d}"
-    
-    # 5. FINAL UNIQUENESS CHECK (rare edge case)
+
+    # 5. FINAL UNIQUENESS CHECK (rare)
     if Product.query.filter_by(sku=new_sku).first():
-        # Collision detected, add timestamp suffix
-        from datetime import datetime
-        timestamp = datetime.now().strftime('%H%M%S')
+        # Collision detected (race or unexpected existing value)
+        # Fallback: append timestamp suffix to preserve uniqueness
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
         new_sku = f"{prefix}-{next_num:05d}-{timestamp}"
-    
+
     return new_sku
 
 

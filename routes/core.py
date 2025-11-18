@@ -518,14 +518,21 @@ def inventory_bulk_add():
                         continue
 
                     # Create product
-                    new_prod = Product(
-                        sku=sku,
-                        name=name,
-                        category=category,  # ✅ Store category
-                        sale_price=sale_price,
-                        cost_price=cost_price,
-                        quantity=quantity
-                    )
+                    try:
+                        new_prod, sku = create_product_with_retry(
+                            name=name,
+                            category=category,
+                            sale_price=sale_price,
+                            cost_price=cost_price,
+                            quantity=quantity,
+                            max_retries=3
+                        )
+                    except Exception as e:
+                        # Could not create a product even after retries
+                        db.session.rollback()
+                        errors.append(f"Row {row_num}: Failed to create product: {str(e)}")
+                        skipped_count += 1
+                        continue
                     db.session.add(new_prod)
                     db.session.flush()
 
@@ -605,6 +612,94 @@ def inventory_bulk_add():
     categories = get_category_suggestions()
     
     return render_template('inventory_bulk_add.html', categories=categories)
+
+
+def create_product_with_retry(name, category, sale_price, cost_price, quantity, custom_sku=None, max_retries=3):
+    """
+    Try to create a Product record with an auto-generated SKU or a provided custom_sku.
+    Retries on generated SKU collisions. If custom_sku is provided, it is validated and used;
+    if it's invalid or already exists, generate_sku will raise ValueError and we will return that error.
+    Returns (new_prod, sku) on success. Raises the last exception on fatal failure.
+    """
+    from datetime import datetime
+    from routes.sku_utils import generate_sku
+    from models import Product
+    attempt = 0
+    last_exc = None
+
+    # If a custom_sku is provided, attempt once to use it (generate_sku will validate uniqueness/format).
+    # We don't loop retries for a user-supplied SKU because it should be deterministic.
+    if custom_sku:
+        sku = None
+        try:
+            sku = generate_sku(name, category=category, custom_sku=custom_sku)
+        except Exception as e:
+            # Propagate validation error (e.g., duplicate or invalid format)
+            raise
+
+        new_prod = Product(
+            sku=sku,
+            name=name,
+            category=category,
+            sale_price=sale_price,
+            cost_price=cost_price,
+            quantity=quantity
+        )
+        db.session.add(new_prod)
+        try:
+            db.session.flush()
+            return new_prod, sku
+        except exc.IntegrityError as ie:
+            db.session.rollback()
+            # If duplicate despite validation, raise so caller can decide (no automatic retry for custom_sku)
+            raise ie
+        except Exception:
+            db.session.rollback()
+            raise
+
+    # No custom_sku: generate and retry on collisions
+    while attempt < max_retries:
+        sku = generate_sku(name, category=category)
+        new_prod = Product(
+            sku=sku,
+            name=name,
+            category=category,
+            sale_price=sale_price,
+            cost_price=cost_price,
+            quantity=quantity
+        )
+        db.session.add(new_prod)
+        try:
+            db.session.flush()
+            return new_prod, sku
+        except exc.IntegrityError as ie:
+            db.session.rollback()
+            last_exc = ie
+            attempt += 1
+            continue
+        except Exception as e:
+            db.session.rollback()
+            raise
+
+    # Exhausted retries: fallback to timestamp-suffixed SKU
+    fallback_prefix = (category or 'PRD')[:3].upper()
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    fallback_sku = f"{fallback_prefix}-{timestamp}"
+    new_prod = Product(
+        sku=fallback_sku,
+        name=name,
+        category=category,
+        sale_price=sale_price,
+        cost_price=cost_price,
+        quantity=quantity
+    )
+    db.session.add(new_prod)
+    try:
+        db.session.flush()
+        return new_prod, fallback_sku
+    except Exception as final_e:
+        db.session.rollback()
+        raise last_exc or final_e
 
 
 @core_bp.route('/api/add_multiple_products', methods=['POST'])
@@ -744,7 +839,6 @@ def api_products_search():
 def purchase():
     if request.method == 'POST':
         try:
-            # Import FIFO utilities
             from routes.fifo_utils import create_inventory_lot
             
             supplier_name = request.form.get('supplier', '').strip() or 'Unknown'
@@ -757,12 +851,14 @@ def purchase():
 
             purchase_is_vatable = 'is_vatable' in request.form
 
+            # Handle Supplier
             supplier = Supplier.query.filter_by(name=supplier_name).first()
             if not supplier and supplier_name != 'Unknown':
                 supplier = Supplier(name=supplier_name)
                 db.session.add(supplier)
                 db.session.flush()
 
+            # Create Purchase Record
             purchase = Purchase(total=0, vat=0, supplier=supplier_name, is_vatable=purchase_is_vatable)
             db.session.add(purchase)
             db.session.flush()
@@ -770,7 +866,13 @@ def purchase():
             total, vat_total = 0.0, 0.0
 
             for item in items:
-                sku = item.get('sku')
+                # 1. Handle SKU input: If "AUTO" or empty, we treat it as a request for Auto-Generation
+                raw_sku = item.get('sku', '').strip()
+                if raw_sku == 'AUTO' or raw_sku == '':
+                    sku_arg = None # This tells create_product_with_retry to generate one
+                else:
+                    sku_arg = raw_sku # This tells it to use the specific SKU provided
+
                 try:
                     qty = int(item.get('qty', 0))
                     unit_cost = float(item.get('unit_cost', 0))
@@ -779,43 +881,59 @@ def purchase():
 
                 name = item.get('name', 'Unnamed')
 
-                if not sku or qty <= 0 or unit_cost <= 0:
+                # 2. Validation: We no longer check "if not sku". We only require Name and Qty.
+                if qty <= 0 or unit_cost < 0:
                     continue
 
                 line_net = round(qty * unit_cost, 2)
-                if purchase_is_vatable:
-                    vat = round(line_net * VAT_RATE, 2)
-                else:
-                    vat = 0.0
+                vat = round(line_net * VAT_RATE, 2) if purchase_is_vatable else 0.0
                 line_total = round(line_net + vat, 2)
 
-                product = Product.query.filter_by(sku=sku).first()
-                if not product:
-                    # ✅ NEW: Auto-generate SKU for new products from purchases
-                    auto_sku = generate_sku(name)
-                    
-                    product = Product(
-                        sku=auto_sku,  # ✅ Use auto-generated SKU
-                        name=name,
-                        sale_price=round(unit_cost * 1.5, 2),
-                        cost_price=unit_cost,
-                        quantity=qty,
-                        is_active=True
-                    )
-                    
-                    flash(f'ℹ️ New product created with auto-SKU: {auto_sku} ({name})', 'info')
-                    db.session.add(product)
-                    db.session.flush()
-                else:
-                    # ✅ FIFO CHANGE: Don't update cost_price with weighted average
-                    # Just add to quantity
-                    product.quantity += qty
+                # 3. Find or Create Product
+                # We only try to find it if a specific SKU was actually provided
+                product = Product.query.filter_by(sku=sku_arg).first() if sku_arg else None
 
+                final_sku = sku_arg # Default to input
+
+                if not product:
+                    # Product doesn't exist, create it (Auto-SKU or Custom SKU)
+                    try:
+                        product, generated_sku = create_product_with_retry(
+                            name=name,
+                            category=None, # You could add a category dropdown to the UI later
+                            sale_price=round(unit_cost * 1.5, 2), # Default markup
+                            cost_price=unit_cost,
+                            quantity=qty,
+                            custom_sku=sku_arg, # If None, it generates. If 'XYZ', it validates 'XYZ'.
+                            max_retries=3
+                        )
+                        db.session.add(product)
+                        db.session.flush()
+                        
+                        # IMPORTANT: Update final_sku to the actual generated string
+                        final_sku = generated_sku
+                        
+                        flash(f'ℹ️ Created new product: {final_sku} ({name})', 'info')
+                    
+                    except ValueError as ve:
+                        db.session.rollback()
+                        flash(f'❌ SKU Error for "{name}": {str(ve)}', 'danger')
+                        return redirect(url_for('core.purchase'))
+                    except Exception as e:
+                        db.session.rollback()
+                        flash(f'❌ Error creating product "{name}": {str(e)}', 'danger')
+                        return redirect(url_for('core.purchase'))
+                else:
+                    # Product exists: Update quantity (FIFO logic handles cost separately)
+                    product.quantity += qty
+                    final_sku = product.sku 
+
+                # 4. Create Purchase Item using the FINAL resolved SKU
                 purchase_item = PurchaseItem(
                     purchase_id=purchase.id,
                     product_id=product.id,
                     product_name=product.name,
-                    sku=sku,
+                    sku=final_sku, 
                     qty=qty,
                     unit_cost=unit_cost,
                     line_total=line_total
@@ -823,7 +941,7 @@ def purchase():
                 db.session.add(purchase_item)
                 db.session.flush()
 
-                # ✅ NEW: Create inventory lot for FIFO
+                # 5. Create Inventory Lot (FIFO)
                 create_inventory_lot(
                     product_id=product.id,
                     quantity=qty,
@@ -835,10 +953,11 @@ def purchase():
                 total += line_total
                 vat_total += vat
 
+            # Update Purchase Totals
             purchase.total = round(total, 2)
             purchase.vat = round(vat_total, 2)
 
-            # Journal entry (same as before)
+            # Create Journal Entry
             if purchase_is_vatable:
                 journal_lines = [
                     {"account_code": get_system_account_code('Inventory'), "debit": round(total - vat_total, 2), "credit": 0},
@@ -856,6 +975,7 @@ def purchase():
                 entries_json=json.dumps(journal_lines)
             )
             db.session.add(journal)
+            
             log_action(f'Recorded Purchase #{purchase.id} from {supplier_name} for ₱{total:,.2f}.')
             db.session.commit()
 
@@ -867,6 +987,7 @@ def purchase():
             flash(f"❌ Error saving purchase: {str(e)}", "danger")
             return redirect(url_for('core.purchase'))
 
+    # GET Request
     products = Product.query.filter_by(is_active=True).order_by(Product.name.asc()).all()
     suppliers = Supplier.query.order_by(Supplier.name).all()
     today = datetime.utcnow().strftime('%Y-%m-%d')
