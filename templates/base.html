@@ -104,7 +104,11 @@
         <i class="bi bi-bag-check me-2"></i> Purchases
       </a>
       <a href="{{ url_for('core.sales') }}" class="{% if '/sales' in request.path %}active{% endif %}">
-        <i class="bi bi-receipt-cutoff me-2"></i> Sales
+        <i class="bi bi-receipt-cutoff me-2"></i> All Sales
+      </a>
+      
+      <a href="{{ url_for('ar_ap.billing_invoices') }}" class="{% if request.endpoint == 'ar_ap.billing_invoices' %}active{% endif %}">
+        <i class="bi bi-file-earmark-spreadsheet me-2"></i> Billing Invoices (Credit)
       </a>
       
       {% if current_user.role in ['Admin', 'Accountant'] %}
@@ -173,13 +177,6 @@
 
           <h6 class="text-white-50 px-3 mt-2 mb-1 ms-3" style="font-size: 0.8rem;">DOCUMENTS & AGING</h6>
 
-          <a href="{{ url_for('ar_ap.billing_invoices') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.billing_invoices' %}active{% endif %}">
-            - Billing Invoices (Credit)
-        </a>
-
-<!--           <a href="{{ url_for('ar_ap.ar_invoices') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.ar_invoices' %}active{% endif %}">
-            - AR Invoices
-          </a> -->
           <a href="{{ url_for('ar_ap.ap_invoices') }}" class="ms-3 ps-4 {% if request.endpoint == 'ar_ap.ap_invoices' %}active{% endif %}">
             - AP Invoices
           </a>
