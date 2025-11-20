@@ -445,7 +445,7 @@ def credit_memos():
 def billing_invoices():
     from models import Product, ARInvoiceItem
     from datetime import datetime, timedelta
-    from routes.fifo_utils import consume_inventory_fifo  # ✅ Add this import
+    from routes.fifo_utils import consume_inventory_fifo
     
     if request.method == 'POST':
         try:
@@ -477,7 +477,6 @@ def billing_invoices():
             line_items = []
             subtotal = 0.0
             total_vat = 0.0
-            total_cogs = 0.0
             
             for i in range(len(product_ids)):
                 product_id = int(product_ids[i])
@@ -500,17 +499,10 @@ def billing_invoices():
                 if line_is_vatable:
                     net_amount = line_total / 1.12
                     line_vat = line_total - net_amount
+                    total_vat += line_vat
                 
-                # ✅ FIFO CHANGE: Calculate COGS using FIFO
-                try:
-                    line_cogs, _ = consume_inventory_fifo(
-                        product_id=product.id,
-                        quantity_needed=qty,
-                        ar_invoice_id=None,  # Will be set after creating invoice
-                        ar_invoice_item_id=None
-                    )
-                except ValueError as e:
-                    flash(str(e), 'danger')
+                if line_total <= 0 or line_vat < 0:
+                    flash(f'Invalid line total or VAT for product ID {product_id}', 'danger')
                     return redirect(url_for('ar_ap.billing_invoices'))
                 
                 line_items.append({
@@ -520,13 +512,11 @@ def billing_invoices():
                     'qty': qty,
                     'unit_price': unit_price,
                     'line_total': line_total,
-                    'cogs': line_cogs,  # ✅ Using FIFO COGS
-                    'is_vatable': line_is_vatable
+                    'is_vatable': line_is_vatable,
+                    'cogs': 0.0  # Will be set after consumption
                 })
                 
                 subtotal += line_total
-                total_vat += line_vat
-                total_cogs += line_cogs
             
             invoice_total = subtotal
             
@@ -543,8 +533,8 @@ def billing_invoices():
                 total=round(invoice_total, 2),
                 vat=round(total_vat, 2),
                 paid=0.0,
+                is_vatable=(is_vatable or (total_vat > 0.0)),
                 status='Open',
-                is_vatable=is_vatable,
                 invoice_number=invoice_number,
                 description=description,
                 due_date=due_date
@@ -561,55 +551,55 @@ def billing_invoices():
                     qty=item['qty'],
                     unit_price=item['unit_price'],
                     line_total=item['line_total'],
-                    cogs=item['cogs'],  # ✅ Using FIFO COGS
+                    cogs=item['cogs'],
                     is_vatable=item['is_vatable']
                 )
                 db.session.add(ar_item)
-                
-                product = Product.query.get(item['product_id'])
-                if product:
-                    product.quantity -= item['qty']
-                    db.session.flush()
-
             db.session.flush()
             
-            je_lines = []
+            # ✅ NOW consume FIFO after invoice and items are created
+            total_cogs = 0.0
+            for idx, item in enumerate(line_items):
+                ar_item = ARInvoiceItem.query.filter_by(
+                    ar_invoice_id=ar_invoice.id,
+                    product_id=item['product_id'],
+                    qty=item['qty'],
+                    unit_price=item['unit_price']
+                ).first()
+                
+                if ar_item:
+                    try:
+                        line_cogs, _ = consume_inventory_fifo(
+                            product_id=item['product_id'],
+                            quantity_needed=item['qty'],
+                            ar_invoice_id=ar_invoice.id,
+                            ar_invoice_item_id=ar_item.id
+                        )
+                        item['cogs'] = line_cogs
+                        ar_item.cogs = line_cogs
+                        total_cogs += line_cogs
+                        product = Product.query.get(item['product_id'])
+                        if product:
+                            product.quantity -= item['qty']
+                    except ValueError as e:
+                        db.session.rollback()
+                        flash(f'FIFO error for {item["product_name"]}: {str(e)}', 'danger')
+                        return redirect(url_for('ar_ap.billing_invoices'))
             
-            je_lines.append({
-                'account_code': get_system_account_code('Accounts Receivable'),
-                'debit': round(invoice_total, 2),
-                'credit': 0
-            })
-            
-            je_lines.append({
-                'account_code': get_system_account_code('Sales Revenue'),
-                'debit': 0,
-                'credit': round(invoice_total - total_vat, 2)
-            })
+            je_lines = [
+                {'account_code': get_system_account_code('Accounts Receivable'), 'debit': round(invoice_total, 2), 'credit': 0},
+                {'account_code': get_system_account_code('Sales Revenue'), 'debit': 0, 'credit': round(invoice_total - total_vat, 2)},
+            ]
             
             if total_vat > 0:
-                je_lines.append({
-                    'account_code': get_system_account_code('VAT Payable'),
-                    'debit': 0,
-                    'credit': round(total_vat, 2)
-                })
+                je_lines.append({'account_code': get_system_account_code('VAT Payable'), 'debit': 0, 'credit': round(total_vat, 2)})
             
-            je_lines.append({
-                'account_code': get_system_account_code('COGS'),
-                'debit': round(total_cogs, 2),
-                'credit': 0
-            })
+            je_lines.extend([
+                {'account_code': get_system_account_code('COGS'), 'debit': round(total_cogs, 2), 'credit': 0},
+                {'account_code': get_system_account_code('Inventory'), 'debit': 0, 'credit': round(total_cogs, 2)}
+            ])
             
-            je_lines.append({
-                'account_code': get_system_account_code('Inventory'),
-                'debit': 0,
-                'credit': round(total_cogs, 2)
-            })
-            
-            je = JournalEntry(
-                description=f'Billing Invoice {invoice_number} - {description}',
-                entries_json=json.dumps(je_lines)
-            )
+            je = JournalEntry(description=f'Billing Invoice {invoice_number} - {description}', entries_json=json.dumps(je_lines))
             db.session.add(je)
             
             log_action(f'Created Billing Invoice {invoice_number} for ₱{invoice_total:,.2f} (Due: {due_date.strftime("%Y-%m-%d")})')
