@@ -79,10 +79,10 @@
                             
                             {% if not inv.voided_at %}
                                 {% if inv.status != 'Paid' %}
-                                <button class="btn btn-sm btn-primary" 
-                                        data-bs-toggle="modal" 
-                                        data-bs-target="#recordPaymentModal" 
-                                        onclick="setPaymentDetails('AR', {{ inv.id }}, {{ balance }}, {{ inv.customer.wht_rate_percent or 0 }}, {{ inv.total - inv.vat }})">
+                                <button class="btn btn-sm btn-primary"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#recordPaymentModal"
+                                        onclick="setPaymentDetails('AR', {{ inv.id }}, {{ balance }}, {{ inv.customer.wht_rate_percent if inv.customer else 0 }}, {{ inv.total - inv.vat }})">
                                     <i class="bi bi-cash"></i> Collect
                                 </button>
                                 {% endif %}
@@ -346,7 +346,7 @@
     </div>
 </div>
 
-<!-- Payment Modal -->
+<!-- Replace your existing payment modal <div> with this full block (no Jinja 'inv' usage) -->
 <div class="modal fade" id="recordPaymentModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
@@ -368,7 +368,10 @@
                     <div class="mb-3">
                         <label class="form-label"><strong>Withholding Tax (Form 2307)</strong></label>
                         <input type="number" step="0.01" name="wht_amount" id="paymentWHT" class="form-control" oninput="calculateWHT('wht')" value="0" required>
+                        <small class="text-muted">Enter WHT amount manually if applicable.</small>
                     </div>
+
+                    <!-- Removed auto-calculate button per request; WHT is manual only -->
 
                     <div class="mb-3">
                         <label class="form-label">Payment Method</label>
@@ -377,11 +380,11 @@
                             <option value="Bank">Bank Transfer/Check</option>
                         </select>
                     </div>
-                    
+
                     <div class="alert alert-info">
                         <div>Full Balance Due: <strong id="maxBalance">₱0.00</strong></div>
                         <hr class="my-2">
-                        <div class_name="fw-bold">Total Credited: <strong id="totalCredited" class="fs-5">₱0.00</strong></div>
+                        <div class="fw-bold">Total Credited: <strong id="totalCredited" class="fs-5">₱0.00</strong></div>
                         <small id="whtNotice" class="text-muted d-none">WHT rate applied.</small>
                     </div>
 
@@ -536,113 +539,128 @@ function updateLineItem(id) {
 
 function calculateTotals() {
     const lineItems = document.querySelectorAll('.line-item');
-    let subtotal = 0;
+    let subtotal = 0;  // Net subtotal
     let totalVAT = 0;
+    let grandTotal = 0;
     
     lineItems.forEach(item => {
         const qty = parseFloat(item.querySelector('.qty-input').value) || 0;
         const price = parseFloat(item.querySelector('.price-input').value) || 0;
         const isVatable = item.querySelector('.vatable-select').value === 'true';
         
-        const lineTotal = qty * price;
+        let lineTotal = qty * price;
         let lineVAT = 0;
         
         if (isVatable && lineTotal > 0) {
-            // VAT is included in price: VAT = Total - (Total / 1.12)
-            const netAmount = lineTotal / 1.12;
-            lineVAT = lineTotal - netAmount;
+            const netPrice = lineTotal / 1.12;
+            lineVAT = lineTotal - netPrice;
+            subtotal += netPrice;  // Add net to subtotal
+        } else {
+            subtotal += lineTotal;  // Non-vatable: add full to subtotal
         }
         
-        item.querySelector('.line-total').value = '₱' + lineTotal.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-        subtotal += lineTotal;
         totalVAT += lineVAT;
+        grandTotal += lineTotal;  // Full amount
+        
+        item.querySelector('.line-total').value = '₱' + lineTotal.toFixed(2);
     });
     
-    const grandTotal = subtotal;
-    
-    document.getElementById('displaySubtotal').textContent = '₱' + subtotal.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    document.getElementById('displayVAT').textContent = '₱' + totalVAT.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    document.getElementById('displayTotal').textContent = '₱' + grandTotal.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    document.getElementById('displaySubtotal').textContent = '₱' + subtotal.toFixed(2);
+    document.getElementById('displayVAT').textContent = '₱' + totalVAT.toFixed(2);
+    document.getElementById('displayTotal').textContent = '₱' + grandTotal.toFixed(2);
 }
 
 // ✅ REVISED: setPaymentDetails function
 function setPaymentDetails(refType, refId, balance, wht_rate, vatable_base) {
     document.getElementById('paymentRefType').value = refType;
     document.getElementById('paymentRefId').value = refId;
-    
-    let fullBalance = parseFloat(balance);
-    let whtAmount = 0;
-    let amountPaid = fullBalance;
-    
-    // Check if a WHT rate is set for the customer
-    if (wht_rate > 0) {
-        // Calculate WHT. NOTE: This assumes WHT is on the vatable_base (Total - VAT).
-        // If the invoice is non-VAT, vatable_base will equal the total (which is correct for your test plan).
-        whtAmount = (parseFloat(vatable_base) * (parseFloat(wht_rate) / 100));
-        
-        // Only apply if WHT is less than or equal to the balance
-        if (whtAmount <= fullBalance) {
-            amountPaid = (fullBalance - whtAmount);
-            document.getElementById('whtNotice').classList.remove('d-none');
-            document.getElementById('whtNotice').textContent = `Auto-calculated ${wht_rate}% WHT on ₱${vatable_base.toFixed(2)}.`;
+
+    const fullBalance = parseFloat(balance) || 0;
+    const rate = parseFloat(wht_rate) || 0;
+    const vatable = parseFloat(vatable_base) || 0;
+
+    // store for Calculate WHT button (modal is shared)
+    window.currentWHTRate = rate;
+    window.currentVatableBase = vatable;
+
+    // keep a hidden copy of the full balance for calculations
+    document.getElementById('paymentFullBalance').value = fullBalance;
+
+    // do not auto-fill amounts — leave for user input
+    document.getElementById('paymentAmount').value = '';
+    document.getElementById('paymentWHT').value = '0';
+
+    // update UI displays
+    document.getElementById('maxBalance').innerText = '₱' + fullBalance.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const notice = document.getElementById('whtNotice');
+
+    // If the customer has a WHT rate, show informative notice but do not auto-set fields
+    if (rate > 0) {
+        // compute what WHT would be on the vatable base for info
+        const infoWHT = +(vatable * (rate / 100)).toFixed(2);
+        if (infoWHT <= fullBalance) {
+            notice.classList.remove('d-none');
+            notice.textContent = `Customer has ${rate}% WHT. Click "Calculate WHT" to apply on ₱${vatable.toFixed(2)}.`;
         } else {
-             // WHT is more than balance, just set to 0
-             whtAmount = 0;
-             document.getElementById('whtNotice').classList.add('d-none');
+            // WHT would exceed balance — still show info but warn
+            notice.classList.remove('d-none');
+            notice.textContent = `Customer has ${rate}% WHT but calculated WHT (₱${infoWHT.toFixed(2)}) exceeds balance. Adjust amount manually.`;
         }
     } else {
-        document.getElementById('whtNotice').classList.add('d-none');
+        notice.classList.add('d-none');
+        notice.textContent = '';
     }
 
-    // Set the hidden balance field
-    document.getElementById('paymentFullBalance').value = fullBalance.toFixed(2);
-
-    // Set the visible fields
-    document.getElementById('paymentAmount').value = amountPaid.toFixed(2);
-    document.getElementById('paymentWHT').value = whtAmount.toFixed(2);
-    
-    // Update summary display
-    document.getElementById('maxBalance').innerText = '₱' + fullBalance.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    
-    // Trigger calculation to update "Total Credited"
+    // update totals display
     calculateWHT();
 }
 
 // ✅ NEW: calculateWHT function
 function calculateWHT(changedField) {
     const fullBalance = parseFloat(document.getElementById('paymentFullBalance').value) || 0;
-    let amountPaidEl = document.getElementById('paymentAmount');
-    let whtAmountEl = document.getElementById('paymentWHT');
-    
-    let amountPaid = parseFloat(amountPaidEl.value) || 0;
-    let whtAmount = parseFloat(whtAmountEl.value) || 0;
+    const amountEl = document.getElementById('paymentAmount');
+    const whtEl = document.getElementById('paymentWHT');
 
-    if (changedField === 'amount') {
-        // If user changes Amount Paid, auto-calculate WHT
-        whtAmount = fullBalance - amountPaid;
-        if (whtAmount < 0) whtAmount = 0; // Don't allow negative WHT
-        whtAmountEl.value = whtAmount.toFixed(2);
-    } else if (changedField === 'wht') {
-        // If user changes WHT, auto-calculate Amount Paid
-        amountPaid = fullBalance - whtAmount;
-        if (amountPaid < 0) amountPaid = 0; // Don't allow negative payment
-        amountPaidEl.value = amountPaid.toFixed(2);
+    // Read values that the user typed — do NOT auto-change the other field
+    const amount = parseFloat(amountEl.value) || 0;
+    const wht = parseFloat(whtEl.value) || 0;
+
+    // Compute totals and update UI only
+    const totalCredited = +(amount + wht);
+    const totalCreditedEl = document.getElementById('totalCredited');
+
+    totalCreditedEl.innerText = '₱' + totalCredited.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+    // Visual indicator whether total matches full balance
+    if (Math.abs(totalCredited - fullBalance) > 0.005) {
+        totalCreditedEl.classList.add('text-danger');
+        totalCreditedEl.classList.remove('text-success');
+    } else {
+        totalCreditedEl.classList.remove('text-danger');
+        totalCreditedEl.classList.add('text-success');
     }
 
-    // Update Total Credited summary
-    let totalCredited = (parseFloat(amountPaidEl.value) || 0) + (parseFloat(whtAmountEl.value) || 0);
-    document.getElementById('totalCredited').innerText = '₱' + totalCredited.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-
-    // Check if total credited exceeds balance
-    const summaryEl = document.getElementById('totalCredited');
-    if (totalCredited.toFixed(2) != fullBalance.toFixed(2)) {
-        summaryEl.classList.add('text-danger');
-        summaryEl.classList.remove('text-success');
+    // Optional: show a small inline hint if totalCredited > fullBalance
+    const notice = document.getElementById('whtNotice');
+    if (totalCredited > fullBalance + 0.005) {
+        // warn user that credited total exceeds invoice balance
+        if (notice) {
+            notice.classList.remove('d-none');
+            notice.textContent = 'Total (Amount + WHT) exceeds invoice balance. Adjust values.';
+        }
     } else {
-        summaryEl.classList.remove('text-danger');
-        summaryEl.classList.add('text-success');
+        // keep only informational WHT notice (if set by setPaymentDetails)
+        if (notice && notice.dataset.info) {
+            notice.classList.remove('d-none');
+            notice.textContent = notice.dataset.info;
+        } else if (notice) {
+            notice.classList.add('d-none');
+            notice.textContent = '';
+        }
     }
 }
+
+
 
 // Auto-calculate due date based on customer payment terms
 function updatePaymentTerms() {
