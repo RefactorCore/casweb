@@ -517,7 +517,10 @@ def form_2307_report():
 def ar_aging():
     """Generates an Accounts Receivable Aging report."""
     today = date.today()
-    invoices = ARInvoice.query.filter(ARInvoice.status != 'Paid').all()
+    invoices = ARInvoice.query.filter(
+        (ARInvoice.total - ARInvoice.paid) > 0.01,
+        ARInvoice.voided_at.is_(None) # Explicitly exclude voided invoices
+    ).all()
     
     aging_data = {
         'current': [], '1-30': [], '31-60': [], '61-90': [], '91+': []
@@ -554,7 +557,10 @@ def ar_aging():
 def ap_aging():
     """Generates an Accounts Payable Aging report."""
     today = date.today()
-    invoices = APInvoice.query.filter(APInvoice.status != 'Paid').all()
+    invoices = APInvoice.query.filter(
+        (APInvoice.total - APInvoice.paid) > 0.01,
+        APInvoice.voided_at.is_(None)
+    ).all()
 
     aging_data = {
         'current': [], '1-30': [], '31-60': [], '61-90': [], '91+': []

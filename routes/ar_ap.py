@@ -441,7 +441,7 @@ def credit_memos():
 
 @ar_ap_bp.route('/billing-invoices', methods=['GET', 'POST'])
 @login_required
-@role_required('Admin', 'Accountant')
+@role_required('Admin', 'Accountant','Cashier')
 def billing_invoices():
     from models import Product, ARInvoiceItem
     from datetime import datetime, timedelta

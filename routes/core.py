@@ -2054,7 +2054,7 @@ def api_product(sku):
 
 # --- ADD THIS LOGIN ROUTE ---
 @core_bp.route('/login', methods=['GET', 'POST'])
-@limiter.limit("15 per minute") 
+@limiter.limit("10 per minute") 
 def login():
     """Handles user login."""
     if current_user.is_authenticated:
